@@ -21,7 +21,9 @@ import ..ProgramConstantsModule: BATCH_DIM, FEATURE_DIM
 - `varMap::Array{String,1}`: The names of the features,
     with shape `(nfeatures,)`.
 """
-mutable struct Dataset{T<:Real}
+abstract type AbstractDataset{T<:Real} end
+
+mutable struct Dataset{T<:Real} <: AbstractDataset{T}
     X::AbstractMatrix{T}
     y::AbstractVector{T}
     n::Int

@@ -6,6 +6,7 @@ export Population,
     HallOfFame,
     Options,
     Dataset,
+    AbstractDataset,
     MutationWeights,
     Node,
 
@@ -144,6 +145,7 @@ import .CoreModule:
     FEATURE_DIM,
     RecordType,
     Dataset,
+    AbstractDataset,
     Options,
     MutationWeights,
     plus,
@@ -343,7 +345,7 @@ function EquationSearch(
 end
 
 function EquationSearch(
-    datasets::Vector{Dataset{T}};
+    datasets::Vector{AD};
     niterations::Int=10,
     options::Options=Options(),
     parallelism=:multithreading,
@@ -352,7 +354,7 @@ function EquationSearch(
     addprocs_function::Union{Function,Nothing}=nothing,
     runtests::Bool=true,
     saved_state::Union{StateType{T},Nothing}=nothing,
-) where {T<:Real}
+) where {T<:Real, AD<:AbstractDataset{T}}
     concurrency = if parallelism in (:multithreading, "multithreading")
         :multithreading
     elseif parallelism in (:multiprocessing, "multiprocessing")
@@ -392,7 +394,7 @@ end
 
 function _EquationSearch(
     parallelism::Symbol,
-    datasets::Vector{Dataset{T}};
+    datasets::Vector{AD};
     niterations::Int,
     options::Options,
     numprocs::Union{Int,Nothing},
@@ -400,7 +402,7 @@ function _EquationSearch(
     addprocs_function::Union{Function,Nothing},
     runtests::Bool,
     saved_state::Union{StateType{T},Nothing},
-) where {T<:Real}
+) where {T<:Real, AD<:AbstractDataset{T}}
     if options.deterministic
         if parallelism != :serial
             error("Determinism is only guaranteed for serial mode.")
@@ -436,7 +438,14 @@ function _EquationSearch(
     if runtests
         test_option_configuration(T, options)
         # Testing the first output variable is the same:
-        test_dataset_configuration(example_dataset, options)
+        if typeof(example_dataset) <: Dataset
+            test_dataset_configuration(example_dataset, options)
+        else
+            debug(
+                (options.verbosity > 0 || options.progress),
+                "Note: you are running with a custom Dataset type. No testing of the dataset configuration is performed make sure your data is correct and that you use a compatible loss function.",
+            )
+        end
     end
 
     for dataset in datasets

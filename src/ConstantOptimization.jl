@@ -3,14 +3,14 @@ module ConstantOptimizationModule
 using LineSearches: LineSearches
 using Optim: Optim
 import DynamicExpressions: Node, get_constants, set_constants, count_constants
-import ..CoreModule: Options, Dataset
+import ..CoreModule: Options, Dataset, AbstractDataset
 import ..UtilsModule: get_birth_order
 import ..LossFunctionsModule: score_func, eval_loss
 import ..PopMemberModule: PopMember
 
 # Proxy function for optimization
 function opt_func(
-    x::Vector{T}, dataset::Dataset{T}, tree::Node{T}, options::Options
+    x::Vector{T}, dataset::AbstractDataset{T}, tree::Node{T}, options::Options
 )::T where {T<:Real}
     set_constants(tree, x)
     # TODO(mcranmer): This should use score_func batching.
@@ -20,7 +20,7 @@ end
 
 # Use Nelder-Mead to optimize the constants in an equation
 function optimize_constants(
-    dataset::Dataset{T}, member::PopMember{T}, options::Options
+    dataset::AbstractDataset{T}, member::PopMember{T}, options::Options
 )::Tuple{PopMember{T},Float64} where {T<:Real}
     nconst = count_constants(member.tree)
     num_evals = 0.0

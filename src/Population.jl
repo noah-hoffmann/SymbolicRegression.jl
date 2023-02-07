@@ -3,7 +3,7 @@ module PopulationModule
 using StatsBase: StatsBase
 import Random: randperm
 import DynamicExpressions: string_tree
-import ..CoreModule: Options, Dataset, RecordType
+import ..CoreModule: Options, Dataset, AbstractDataset, RecordType
 import ..ComplexityModule: compute_complexity
 import ..LossFunctionsModule: score_func, update_baseline_loss!
 import ..AdaptiveParsimonyModule: RunningSearchStatistics
@@ -22,14 +22,14 @@ Create population from list of PopMembers.
 """
 Population(pop::Array{PopMember{T},1}) where {T<:Real} = Population{T}(pop, size(pop, 1))
 """
-    Population(dataset::Dataset{T};
+    Population(dataset::AbstractDataset{T};
                npop::Int, nlength::Int=3, options::Options,
                nfeatures::Int)
 
 Create random population and score them on the dataset.
 """
 function Population(
-    dataset::Dataset{T}; npop::Int, nlength::Int=3, options::Options, nfeatures::Int
+    dataset::AbstractDataset{T}; npop::Int, nlength::Int=3, options::Options, nfeatures::Int
 ) where {T<:Real}
     return Population{T}(
         [
@@ -132,7 +132,7 @@ end
 end
 
 function finalize_scores(
-    dataset::Dataset{T}, pop::Population, options::Options
+    dataset::AbstractDataset{T}, pop::Population, options::Options
 )::Tuple{Population,Float64} where {T<:Real}
     need_recalculate = options.batching
     num_evals = 0.0

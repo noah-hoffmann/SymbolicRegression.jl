@@ -2,7 +2,7 @@ module RegularizedEvolutionModule
 
 import Random: shuffle!
 import DynamicExpressions: string_tree
-import ..CoreModule: Options, Dataset, RecordType
+import ..CoreModule: Options, Dataset, AbstractDataset, RecordType
 import ..PopMemberModule: PopMember
 import ..PopulationModule: Population, best_of_sample
 import ..AdaptiveParsimonyModule: RunningSearchStatistics
@@ -12,7 +12,7 @@ import ..RecorderModule: @recorder
 # Pass through the population several times, replacing the oldest
 # with the fittest of a small subsample
 function reg_evol_cycle(
-    dataset::Dataset{T},
+    dataset::AbstractDataset{T},
     pop::Population,
     temperature::T,
     curmaxsize::Int,

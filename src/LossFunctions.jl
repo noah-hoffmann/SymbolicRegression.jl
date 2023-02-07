@@ -5,7 +5,7 @@ using StatsBase: StatsBase
 import LossFunctions: value, AggMode, SupervisedLoss
 import DynamicExpressions: Node
 import ..InterfaceDynamicExpressionsModule: eval_tree_array
-import ..CoreModule: Options, Dataset
+import ..CoreModule: Options, Dataset, AbstractDataset
 import ..ComplexityModule: compute_complexity
 
 function _loss(
@@ -51,13 +51,13 @@ end
 
 # This evaluates function F:
 function evaluator(
-    f::F, tree::Node{T}, dataset::Dataset{T}, options::Options
+    f::F, tree::Node{T}, dataset::AbstractDataset{T}, options::Options
 )::T where {T<:Real,F}
     return f(tree, dataset, options)
 end
 
 # Evaluate the loss of a particular expression on the input dataset.
-function eval_loss(tree::Node{T}, dataset::Dataset{T}, options::Options)::T where {T<:Real}
+function eval_loss(tree::Node{T}, dataset::AbstractDataset{T}, options::Options)::T where {T<:Real}
     if options.loss_function === nothing
         return _eval_loss(tree, dataset, options)
     else
@@ -84,23 +84,20 @@ end
 
 # Score an equation
 function score_func(
-    dataset::Dataset{T}, tree::Node{T}, options::Options
+    dataset::AbstractDataset{T}, tree::Node{T}, options::Options
 )::Tuple{T,T} where {T<:Real}
     result_loss = eval_loss(tree, dataset, options)
     score = loss_to_score(result_loss, dataset.baseline_loss, tree, options)
     return score, result_loss
 end
 
-# Score an equation with a small batch
-function score_func_batch(
-    dataset::Dataset{T}, tree::Node{T}, options::Options
-)::Tuple{T,T} where {T<:Real}
-    batch_idx = StatsBase.sample(1:(dataset.n), options.batch_size; replace=true)
+function eval_batch(dataset::Dataset{T}, tree::Node{T}, options::Options, batch_idx) where {T<:Real}
     batch_X = view(dataset.X, :, batch_idx)
     batch_y = view(dataset.y, batch_idx)
     (prediction, completion) = eval_tree_array(tree, batch_X, options)
+
     if !completion
-        return T(0), T(Inf)
+        return T(Inf)
     end
 
     if !dataset.weighted
@@ -110,16 +107,35 @@ function score_func_batch(
         batch_w = view(w, batch_idx)
         result_loss = _weighted_loss(prediction, batch_y, batch_w, options.elementwise_loss)
     end
+    return result_loss
+end
+
+# Score an equation with a small batch
+function score_func_batch(
+    dataset::AbstractDataset{T}, tree::Node{T}, options::Options
+)::Tuple{T,T} where {T<:Real}
+    batch_idx = StatsBase.sample(1:(dataset.n), options.batch_size; replace=true)
+    
+    if options.eval_batch_function === nothing
+        result_loss = eval_batch(dataset, tree, options, batch_idx)
+    else
+        result_loss = options.eval_batch_function(dataset, tree, options, batch_idx)
+    end
+
+    if result_loss == T(Inf)
+        return T(0), T(Inf)
+    end
+
     score = loss_to_score(result_loss, dataset.baseline_loss, tree, options)
     return score, result_loss
 end
 
 """
-    update_baseline_loss!(dataset::Dataset{T}, options::Options) where {T<:Real}
+    update_baseline_loss!(dataset::AbstractDataset{T}, options::Options) where {T<:Real}
 
 Update the baseline loss of the dataset using the loss function specified in `options`.
 """
-function update_baseline_loss!(dataset::Dataset{T}, options::Options) where {T<:Real}
+function update_baseline_loss!(dataset::AbstractDataset{T}, options::Options) where {T<:Real}
     example_tree = Node(T; val=dataset.avg_y)
     dataset.baseline_loss = eval_loss(example_tree, dataset, options)
     return nothing

@@ -1,7 +1,7 @@
 module SingleIterationModule
 
 import DynamicExpressions: string_tree, simplify_tree, combine_operators
-import ..CoreModule: Options, Dataset, RecordType
+import ..CoreModule: Options, Dataset, AbstractDataset, RecordType
 import ..ComplexityModule: compute_complexity
 import ..UtilsModule: debug
 import ..PopMemberModule: copy_pop_member, generate_reference
@@ -15,7 +15,7 @@ import ..RecorderModule: @recorder
 # Cycle through regularized evolution many times,
 # printing the fittest equation every 10% through
 function s_r_cycle(
-    dataset::Dataset{T},
+    dataset::AbstractDataset{T},
     pop::Population,
     ncycles::Int,
     curmaxsize::Int,
@@ -61,7 +61,7 @@ function s_r_cycle(
 end
 
 function optimize_and_simplify_population(
-    dataset::Dataset{T},
+    dataset::AbstractDataset{T},
     pop::Population,
     options::Options,
     curmaxsize::Int,

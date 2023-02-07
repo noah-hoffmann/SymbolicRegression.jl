@@ -1,7 +1,7 @@
 module PopMemberModule
 
 import DynamicExpressions: Node, copy_node
-import ..CoreModule: Options, Dataset
+import ..CoreModule: Options, Dataset, AbstractDataset
 import ..UtilsModule: get_birth_order
 import ..LossFunctionsModule: score_func
 
@@ -42,7 +42,7 @@ function PopMember(
 end
 
 """
-    PopMember(dataset::Dataset{T},
+    PopMember(dataset::AbstractDataset{T},
               t::Node, options::Options)
 
 Create a population member with a birth date at the current time.
@@ -50,12 +50,12 @@ Automatically compute the score for this tree.
 
 # Arguments
 
-- `dataset::Dataset{T}`: The dataset to evaluate the tree on.
+- `dataset::AbstractDataset{T}`: The dataset to evaluate the tree on.
 - `t::Node`: The tree for the population member.
 - `options::Options`: What options to use.
 """
 function PopMember(
-    dataset::Dataset{T},
+    dataset::AbstractDataset{T},
     t::Node{T},
     options::Options;
     ref::Int=-1,

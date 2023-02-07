@@ -161,6 +161,7 @@ struct Options{CT}
     nested_constraints::Union{Vector{Tuple{Int,Int,Vector{Tuple{Int,Int,Int}}}},Nothing}
     deterministic::Bool
     define_helper_functions::Bool
+    eval_batch_function::Union{Function, Nothing}
 end
 
 function Base.print(io::IO, options::Options)

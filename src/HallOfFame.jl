@@ -1,7 +1,7 @@
 module HallOfFameModule
 
 import DynamicExpressions: Node, string_tree
-import ..CoreModule: MAX_DEGREE, Options, Dataset
+import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset
 import ..ComplexityModule: compute_complexity
 import ..PopMemberModule: PopMember, copy_pop_member
 import ..LossFunctionsModule: eval_loss
@@ -52,11 +52,11 @@ function copy_hall_of_fame(hof::HallOfFame{T})::HallOfFame{T} where {T<:Real}
 end
 
 """
-    calculate_pareto_frontier(dataset::Dataset{T}, hallOfFame::HallOfFame{T},
+    calculate_pareto_frontier(dataset::AbstractDataset{T}, hallOfFame::HallOfFame{T},
                             options::Options) where {T<:Real}
 """
 function calculate_pareto_frontier(
-    dataset::Dataset{T}, hallOfFame::HallOfFame{T}, options::Options
+    dataset::AbstractDataset{T}, hallOfFame::HallOfFame{T}, options::Options
 )::Vector{PopMember{T}} where {T<:Real}
     # TODO - remove dataset from args.
     # Dominating pareto curve - must be better than all simpler equations

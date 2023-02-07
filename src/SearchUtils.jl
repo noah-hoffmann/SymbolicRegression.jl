@@ -7,7 +7,7 @@ import Printf: @printf, @sprintf
 using Distributed
 import StatsBase: mean
 
-import ..CoreModule: Dataset, Options
+import ..CoreModule: Dataset, AbstractDataset, Options
 import ..ComplexityModule: compute_complexity
 import ..PopulationModule: Population, copy_population
 import ..HallOfFameModule:
@@ -45,8 +45,8 @@ macro sr_spawner(parallel, p, expr)
 end
 
 function init_dummy_pops(
-    nout::Int, npops::Int, datasets::Vector{Dataset{T}}, options::Options
-)::Vector{Vector{Population{T}}} where {T}
+    nout::Int, npops::Int, datasets::Vector{AD}, options::Options
+)::Vector{Vector{Population{T}}} where {T, AD<:AbstractDataset{T}}
     return [
         [
             Population(
@@ -107,10 +107,10 @@ function check_for_user_quit(reader::StdinReader)::Bool
 end
 
 function check_for_loss_threshold(
-    datasets::AbstractVector{Dataset{T}},
+    datasets::AbstractVector{AD},
     hallOfFame::AbstractVector{HallOfFame{T}},
     options::Options,
-)::Bool where {T}
+)::Bool where {T, AD<:AbstractDataset{T}}
     options.early_stop_condition === nothing && return false
 
     # Check if all nout are below stopping condition.
@@ -215,7 +215,7 @@ end
 function update_progress_bar!(
     progress_bar::WrappedProgressBar;
     hall_of_fame::HallOfFame{T},
-    dataset::Dataset{T},
+    dataset::AbstractDataset{T},
     options::Options,
     head_node_occupation::Float64,
     parallelism=:serial,
@@ -232,14 +232,14 @@ end
 
 function print_search_state(
     hall_of_fames::Vector{HallOfFame{T}},
-    datasets::Vector{Dataset{T}};
+    datasets::Vector{AD};
     options::Options,
     equation_speed::Vector{Float32},
     total_cycles::Int,
     cycles_remaining::Vector{Int},
     head_node_occupation::Float64,
     parallelism=:serial,
-) where {T}
+) where {T, AD<:AbstractDataset{T}}
     nout = length(datasets)
     average_speed = sum(equation_speed) / length(equation_speed)
 

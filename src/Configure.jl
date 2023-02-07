@@ -83,7 +83,7 @@ function test_dataset_configuration(dataset::Dataset{T}, options::Options) where
 end
 
 """ Move custom operators and loss functions to workers, if undefined """
-function move_functions_to_workers(procs, options::Options, dataset::Dataset{T}) where {T}
+function move_functions_to_workers(procs, options::Options, dataset::AbstractDataset{T}) where {T}
     enable_autodiff =
         :diff_binops in fieldnames(typeof(options.operators)) &&
         :diff_unaops in fieldnames(typeof(options.operators)) &&
@@ -246,7 +246,7 @@ function test_module_on_workers(procs, options::Options)
     return debug((options.verbosity > 0 || options.progress), "Finished!")
 end
 
-function test_entire_pipeline(procs, dataset::Dataset{T}, options::Options) where {T<:Real}
+function test_entire_pipeline(procs, dataset::AbstractDataset{T}, options::Options) where {T<:Real}
     futures = []
     debug_inline(
         (options.verbosity > 0 || options.progress), "Testing entire pipeline on workers..."
