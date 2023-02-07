@@ -6,7 +6,7 @@ import DynamicExpressions: Node
 using LossFunctions: LossFunctions
 import LossFunctions: SupervisedLoss
 import ..InterfaceDynamicExpressionsModule: eval_tree_array
-import ..CoreModule: Options, Dataset, DATA_TYPE, LOSS_TYPE
+import ..CoreModule: Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
 
 const OLD_LOSS_FUNCTIONS = hasproperty(LossFunctions, :value)
@@ -82,14 +82,14 @@ end
 
 # This evaluates function F:
 function evaluator(
-    f::F, tree::Node{T}, dataset::Dataset{T,L}, options::Options
+    f::F, tree::Node{T}, dataset::AbstractDataset{T,L}, options::Options
 )::L where {T<:DATA_TYPE,L<:LOSS_TYPE,F}
     return f(tree, dataset, options)
 end
 
 # Evaluate the loss of a particular expression on the input dataset.
 function eval_loss(
-    tree::Node{T}, dataset::Dataset{T,L}, options::Options
+    tree::Node{T}, dataset::AbstractDataset{T,L}, options::Options
 )::L where {T<:DATA_TYPE,L<:LOSS_TYPE}
     if options.loss_function === nothing
         return _eval_loss(tree, dataset, options)
@@ -131,7 +131,7 @@ end
 
 # Score an equation
 function score_func(
-    dataset::Dataset{T,L}, member, options::Options, complexity::Union{Int,Nothing}=nothing
+    dataset::AbstractDataset{T,L}, member, options::Options, complexity::Union{Int,Nothing}=nothing
 )::Tuple{L,L} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     result_loss = eval_loss(get_tree(member), dataset, options)
     score = loss_to_score(
@@ -147,7 +147,7 @@ end
 
 # Score an equation with a small batch
 function score_func_batch(
-    dataset::Dataset{T,L}, member, options::Options, complexity::Union{Int,Nothing}=nothing
+    dataset::AbstractDataset{T,L}, member, options::Options, complexity::Union{Int,Nothing}=nothing
 )::Tuple{L,L} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     if options.loss_function !== nothing
         error("Batched losses for custom objectives are not yet implemented.")
@@ -186,7 +186,7 @@ end
 Update the baseline loss of the dataset using the loss function specified in `options`.
 """
 function update_baseline_loss!(
-    dataset::Dataset{T,L}, options::Options
+    dataset::AbstractDataset{T,L}, options::Options
 ) where {T<:DATA_TYPE,L<:LOSS_TYPE}
     example_tree = Node(T; val=dataset.avg_y)
     baseline_loss = eval_loss(example_tree, dataset, options)

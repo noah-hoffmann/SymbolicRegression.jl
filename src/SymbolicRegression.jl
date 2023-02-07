@@ -6,6 +6,7 @@ export Population,
     HallOfFame,
     Options,
     Dataset,
+    AbstractDataset,
     MutationWeights,
     Node,
     LOSS_TYPE,
@@ -148,6 +149,7 @@ import .CoreModule:
     LOSS_TYPE,
     RecordType,
     Dataset,
+    AbstractDataset,
     Options,
     MutationWeights,
     plus,
@@ -361,7 +363,7 @@ function EquationSearch(dataset::Dataset; kws...)
 end
 
 function EquationSearch(
-    datasets::Vector{D};
+    datasets::Vector{AD};
     niterations::Int=10,
     options::Options=Options(),
     parallelism=:multithreading,
@@ -370,7 +372,7 @@ function EquationSearch(
     addprocs_function::Union{Function,Nothing}=nothing,
     runtests::Bool=true,
     saved_state::Union{StateType{T,L},Nothing}=nothing,
-) where {T<:DATA_TYPE,L<:LOSS_TYPE,D<:Dataset{T,L}}
+) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
     concurrency = if parallelism in (:multithreading, "multithreading")
         :multithreading
     elseif parallelism in (:multiprocessing, "multiprocessing")
@@ -410,7 +412,7 @@ end
 
 function _EquationSearch(
     parallelism::Symbol,
-    datasets::Vector{D};
+    datasets::Vector{AD};
     niterations::Int,
     options::Options,
     numprocs::Union{Int,Nothing},
@@ -418,7 +420,7 @@ function _EquationSearch(
     addprocs_function::Union{Function,Nothing},
     runtests::Bool,
     saved_state::Union{StateType{T,L},Nothing},
-) where {T<:DATA_TYPE,L<:LOSS_TYPE,D<:Dataset{T,L}}
+) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
     if options.deterministic
         if parallelism != :serial
             error("Determinism is only guaranteed for serial mode.")
@@ -454,7 +456,14 @@ function _EquationSearch(
     if runtests
         test_option_configuration(T, options)
         # Testing the first output variable is the same:
-        test_dataset_configuration(example_dataset, options)
+        if typeof(example_dataset) <: Dataset
+            test_dataset_configuration(example_dataset, options)
+        else
+            debug(
+                (options.verbosity > 0 || options.progress),
+                "Note: you are running with a custom Dataset type. No testing of the dataset configuration is performed make sure your data is correct and that you use a compatible loss function.",
+            )
+        end
     end
 
     for dataset in datasets

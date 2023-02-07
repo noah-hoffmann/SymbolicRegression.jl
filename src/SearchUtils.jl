@@ -7,7 +7,7 @@ import Printf: @printf, @sprintf
 using Distributed
 import StatsBase: mean
 
-import ..CoreModule: Dataset, Options
+import ..CoreModule: Dataset, AbstractDataset, Options
 import ..ComplexityModule: compute_complexity
 import ..PopulationModule: Population, copy_population
 import ..HallOfFameModule:
@@ -45,8 +45,8 @@ macro sr_spawner(parallel, p, expr)
 end
 
 function init_dummy_pops(
-    nout::Int, npops::Int, datasets::Vector{D}, options::Options
-)::Vector{Vector{Population{T,L}}} where {T,L,D<:Dataset{T,L}}
+    nout::Int, npops::Int, datasets::Vector{AD}, options::Options
+)::Vector{Vector{Population{T,L}}} where {T,L,AD<:AbstractDataset{T,L}}
     return [
         [
             Population(
@@ -211,7 +211,7 @@ end
 function update_progress_bar!(
     progress_bar::WrappedProgressBar,
     hall_of_fame::HallOfFame{T,L},
-    dataset::Dataset{T,L},
+    dataset::AbstractDataset{T,L},
     options::Options,
     equation_speed::Vector{Float32},
     head_node_occupation::Float64,
@@ -240,7 +240,7 @@ end
 
 function print_search_state(
     hall_of_fames::Vector{H},
-    datasets::Vector{D};
+    datasets::Vector{AD};
     options::Options,
     equation_speed::Vector{Float32},
     total_cycles::Int,
@@ -248,7 +248,7 @@ function print_search_state(
     head_node_occupation::Float64,
     parallelism=:serial,
     width::Union{Integer,Nothing}=nothing,
-) where {T,L,D<:Dataset{T,L},H<:HallOfFame{T,L}}
+) where {T,L,AD<:AbstractDataset{T,L},H<:HallOfFame{T,L}}
     twidth = (width === nothing) ? 100 : max(100, width::Integer)
     nout = length(datasets)
     average_speed = sum(equation_speed) / length(equation_speed)

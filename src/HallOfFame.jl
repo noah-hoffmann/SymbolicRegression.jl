@@ -1,7 +1,7 @@
 module HallOfFameModule
 
 import DynamicExpressions: Node, string_tree
-import ..CoreModule: MAX_DEGREE, Options, Dataset, DATA_TYPE, LOSS_TYPE
+import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
 import ..PopMemberModule: PopMember, copy_pop_member
 import ..LossFunctionsModule: eval_loss

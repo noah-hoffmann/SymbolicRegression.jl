@@ -3,7 +3,7 @@ module PopulationModule
 using StatsBase: StatsBase
 import Random: randperm
 import DynamicExpressions: string_tree
-import ..CoreModule: Options, Dataset, RecordType, DATA_TYPE, LOSS_TYPE
+import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
 import ..LossFunctionsModule: score_func, update_baseline_loss!
 import ..AdaptiveParsimonyModule: RunningSearchStatistics
@@ -28,14 +28,14 @@ function Population(
 end
 
 """
-    Population(dataset::Dataset{T,L};
+    Population(dataset::AbstractDataset{T,L};
                npop::Int, nlength::Int=3, options::Options,
                nfeatures::Int)
 
 Create random population and score them on the dataset.
 """
 function Population(
-    dataset::Dataset{T,L}; npop::Int, nlength::Int=3, options::Options, nfeatures::Int
+    dataset::AbstractDataset{T,L}; npop::Int, nlength::Int=3, options::Options, nfeatures::Int
 ) where {T<:DATA_TYPE,L<:LOSS_TYPE}
     return Population{T,L}(
         [
@@ -137,7 +137,7 @@ function _best_of_sample(
 end
 
 function finalize_scores(
-    dataset::Dataset{T,L}, pop::Population{T,L}, options::Options
+    dataset::AbstractDataset{T,L}, pop::Population{T,L}, options::Options
 )::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     need_recalculate = options.batching
     num_evals = 0.0

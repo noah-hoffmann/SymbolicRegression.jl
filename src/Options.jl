@@ -203,7 +203,7 @@ https://github.com/MilesCranmer/PySR/discussions/115.
             - `SigmoidLoss()`,
             - `DWDMarginLoss(q)`.
 - `loss_function`: Alternatively, you may redefine the loss used
-    as any function of `tree::Node{T}`, `dataset::Dataset{T}`,
+    as any function of `tree::Node{T}`, `dataset::AbstractDataset{T}`,
     and `options::Options`, so long as you output a non-negative
     scalar of type `T`. This is useful if you want to use a loss
     that takes into account derivatives, or correlations across
@@ -377,6 +377,7 @@ function Options(;
     enable_autodiff::Bool=false,
     nested_constraints=nothing,
     deterministic=false,
+    eval_batch_function=nothing,
     # Not search options; just construction options:
     define_helper_functions=true,
     # Deprecated args:
@@ -733,6 +734,7 @@ function Options(;
         nested_constraints,
         deterministic,
         define_helper_functions,
+        eval_batch_function,
     )
 
     return options

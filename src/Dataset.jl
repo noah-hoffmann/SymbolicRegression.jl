@@ -26,6 +26,8 @@ import ..ProgramConstantsModule: BATCH_DIM, FEATURE_DIM, DATA_TYPE, LOSS_TYPE
 - `varMap::Array{String,1}`: The names of the features,
     with shape `(nfeatures,)`.
 """
+abstract type AbstractDataset{T<:DATA_TYPE, L<:LOSS_TYPE,} end
+
 mutable struct Dataset{
     T<:DATA_TYPE,
     L<:LOSS_TYPE,

@@ -3,7 +3,7 @@ module MutateModule
 import DynamicExpressions:
     Node, copy_node, count_nodes, count_constants, simplify_tree, combine_operators
 import ..CoreModule:
-    Options, MutationWeights, Dataset, RecordType, sample_mutation, DATA_TYPE, LOSS_TYPE
+    Options, MutationWeights, Dataset, AbstractDataset, RecordType, sample_mutation, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
 import ..LossFunctionsModule: score_func, score_func_batch
 import ..CheckConstraintsModule: check_constraints
@@ -58,7 +58,7 @@ end
 # Go through one simulated options.annealing mutation cycle
 #  exp(-delta/T) defines probability of accepting a change
 function next_generation(
-    dataset::Dataset{T,L},
+    dataset::AbstractDataset{T,L},
     member::PopMember{T,L},
     temperature,
     curmaxsize::Int,
@@ -324,7 +324,7 @@ end
 function crossover_generation(
     member1::PopMember{T,L},
     member2::PopMember{T,L},
-    dataset::Dataset{T,L},
+    dataset::AbstractDataset{T,L},
     curmaxsize::Int,
     options::Options,
 )::Tuple{PopMember{T,L},PopMember{T,L},Bool,Float64} where {T<:DATA_TYPE,L<:DATA_TYPE}

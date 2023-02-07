@@ -1,10 +1,10 @@
 using SymbolicRegression, SymbolicUtils
 
-X = randn(Float32, 5, 100)
+X = randn(Float32, 5, 1000)
 y = 2 * cos.(X[4, :]) + X[1, :] .^ 2 .- 2
 
 options = SymbolicRegression.Options(;
-    binary_operators=[+, *, /, -], unary_operators=[cos, exp], npopulations=20
+    binary_operators=[+, *, /, -], unary_operators=[cos, exp], npopulations=20, batching=true,
 )
 
 hall_of_fame = EquationSearch(
