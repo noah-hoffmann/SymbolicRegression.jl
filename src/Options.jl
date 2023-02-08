@@ -429,10 +429,10 @@ function Options(;
 
     if elementwise_loss === nothing
         elementwise_loss = L2DistLoss()
-    else
-        if loss_function !== nothing
-            error("You cannot specify both `elementwise_loss` and `loss_function`.")
-        end
+    # else
+    #     if loss_function !== nothing
+    #         error("You cannot specify both `elementwise_loss` and `loss_function`.")
+    #     end
     end
 
     if output_file === nothing
