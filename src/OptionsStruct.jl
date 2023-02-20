@@ -162,6 +162,8 @@ struct Options{CT}
     deterministic::Bool
     define_helper_functions::Bool
     eval_batch_function::Union{Function, Nothing}
+    min_length::Int
+    max_length::Int
 end
 
 function Base.print(io::IO, options::Options)

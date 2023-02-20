@@ -35,7 +35,7 @@ function Population(
         [
             PopMember(
                 dataset,
-                gen_random_tree(nlength, options, nfeatures, T),
+                gen_random_tree(rand(options.min_length:options.max_length), options, nfeatures, T),
                 options;
                 parent=-1,
                 deterministic=options.deterministic,
