@@ -378,6 +378,8 @@ function Options(;
     nested_constraints=nothing,
     deterministic=false,
     eval_batch_function=nothing,
+    min_length::Int=3,
+    max_length::Int=3,
     # Not search options; just construction options:
     define_helper_functions=true,
     # Deprecated args:
@@ -735,6 +737,8 @@ function Options(;
         deterministic,
         define_helper_functions,
         eval_batch_function,
+        min_length,
+        max_length
     )
 
     return options
