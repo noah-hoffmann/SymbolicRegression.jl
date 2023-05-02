@@ -375,6 +375,7 @@ function Options(;
     eval_batch_function=nothing,
     min_length::Int=3,
     max_length::Int=3,
+    predefined_nodes::Vector{Node}=Node[],
     # Not search options; just construction options:
     define_helper_functions=true,
     # Deprecated args:
@@ -625,6 +626,12 @@ function Options(;
         end
     end
 
+    if length(predefined_nodes) > 0 && mutation_weights.replace_with_predefined_node < 1e-6
+        mutation_weights.replace_with_predefined_node = 0.5
+    elseif length(predefined_nodes) == 0
+        mutation_weights.replace_with_predefined_node = 0.0
+    end
+
     options = Options{eltype(complexity_mapping)}(
         operators,
         bin_constraints,
@@ -685,7 +692,8 @@ function Options(;
         define_helper_functions,
         eval_batch_function,
         min_length,
-        max_length
+        max_length,
+        predefined_nodes,
     )
 
     return options

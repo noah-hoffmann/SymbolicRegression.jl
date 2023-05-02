@@ -16,7 +16,8 @@ import ..MutationFunctionsModule:
     prepend_random_op,
     insert_random_op,
     delete_random_op,
-    crossover_trees
+    crossover_trees,
+    replace_random_node
 import ..ConstantOptimizationModule: optimize_constants
 import ..RecorderModule: @recorder
 
@@ -99,6 +100,10 @@ function next_generation(
         elseif mutation_choice == :insert_node
             tree = insert_random_op(tree, options, nfeatures)
             @recorder tmp_recorder["type"] = "insert_op"
+            is_success_always_possible = false
+        elseif mutation_choice == :replace_with_predefined_node
+            tree = replace_random_node(tree, options)
+            @recorder tmp_recorder["type"] = "replace_with_predefined_node"
             is_success_always_possible = false
         elseif mutation_choice == :delete_node
             tree = delete_random_op(tree, options, nfeatures)

@@ -2,7 +2,7 @@ module OptionsStructModule
 
 using Optim: Optim
 using StatsBase: StatsBase
-import DynamicExpressions: AbstractOperatorEnum
+import DynamicExpressions: AbstractOperatorEnum, Node
 import LossFunctions: SupervisedLoss
 
 mutable struct MutationWeights
@@ -15,6 +15,7 @@ mutable struct MutationWeights
     randomize::Float64
     do_nothing::Float64
     optimize::Float64
+    replace_with_predefined_node::Float64
 end
 
 const mutations = [fieldnames(MutationWeights)...]
@@ -47,6 +48,7 @@ will be normalized to sum to 1.0 after initialization.
     randomize=0.00023,
     do_nothing=0.21,
     optimize=0.0,
+    replace_with_predefined_node=0.0,
 )
     return :(MutationWeights($(mutations...)))
 end
@@ -164,6 +166,7 @@ struct Options{CT}
     eval_batch_function::Union{Function, Nothing}
     min_length::Int
     max_length::Int
+    predefined_nodes::Vector{Node}
 end
 
 function Base.print(io::IO, options::Options)
