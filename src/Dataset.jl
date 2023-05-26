@@ -35,7 +35,7 @@ mutable struct Dataset{
     AY<:Union{AbstractVector{T},Nothing},
     AW<:Union{AbstractVector{T},Nothing},
     NT<:NamedTuple,
-}
+} <: AbstractDataset{T, L}
     X::AX
     y::AY
     n::Int
