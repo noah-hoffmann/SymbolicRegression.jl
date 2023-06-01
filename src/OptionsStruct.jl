@@ -60,6 +60,7 @@ function MutationWeights(;
         randomize,
         do_nothing,
         optimize,
+        replace_with_predefined_node,
     )
 end
 
@@ -75,6 +76,7 @@ function Base.convert(::Type{Vector}, w::MutationWeights)::Vector{Float64}
         w.randomize,
         w.do_nothing,
         w.optimize,
+        w.replace_with_predefined_node,
     ]
 end
 
