@@ -14,7 +14,7 @@ options = Options(;
 )
 
 for reverse in [false, true]
-    members = PopMember{Float32}[]
+    members = PopMember{Float32,Float32}[]
 
     # Generate members with scores from 0 to 1:
     for i in 1:n
@@ -24,10 +24,10 @@ for reverse in [false, true]
             score = 1 - score
         end
         test_loss = 1.0f0  # (arbitrary for this test)
-        push!(members, PopMember(tree, score, test_loss))
+        push!(members, PopMember(tree, score, test_loss, options))
     end
 
-    pop = Population(members, n)
+    pop = Population(members)
 
     dummy_running_stats = SymbolicRegression.AdaptiveParsimonyModule.RunningSearchStatistics(;
         options=options

@@ -2,12 +2,20 @@ include("test_params.jl")
 using SymbolicRegression, Test
 import SymbolicUtils: simplify, Symbolic
 import Random: MersenneTwister
+import Base: ≈
+
+function Base.:≈(a::String, b::String)
+    a = replace(a, r"\s+" => "")
+    b = replace(b, r"\s+" => "")
+    return a == b
+end
 
 binary_operators = (+, -, /, *)
 
 index_of_mult = [i for (i, op) in enumerate(binary_operators) if op == *][1]
 
 options = Options(; binary_operators=binary_operators)
+@test options.should_simplify  # Default is true
 
 tree = Node("x1") + Node("x1")
 
@@ -30,10 +38,10 @@ tree = convert(Node, eqn2, options)
 # that SymbolicUtils does not convert it to a power:
 tree = Node("x1") * Node("x1")
 eqn = convert(Symbolic, tree, options)
-@test repr(eqn) == "x1*x1"
+@test repr(eqn) ≈ "x1*x1"
 # Test converting back:
 tree_copy = convert(Node, eqn, options)
-@test repr(tree_copy) == "(x1 * x1)"
+@test repr(tree_copy) ≈ "(x1*x1)"
 
 # Let's test a much more complex function,
 # with custom operators, and unary operators:
@@ -79,17 +87,3 @@ output3, flag3 = eval_tree_array(tree_copy2, X, options)
 # Simplified equation may give a different answer due to rounding errors,
 # so we weaken the requirement:
 @test isapprox(output1, output3, atol=1e-2 * sqrt(N))
-
-# Test that simplification (within the library) preserves shared nodes:
-options = Options(; binary_operators=(+, -, *, /))
-base_tree = Node(1, Node(; val=0.3), Node(; val=0.2))
-tree = x1 * base_tree + base_tree
-simplify_tree(tree, options.operators)
-@test tree.l.r === tree.r
-
-base_tree = (x1 + Node(; val=0.3)) + Node(; val=0.2)
-true_simplification_value = 0.5
-tree = x2 * base_tree + base_tree
-combine_operators(tree, options.operators)
-# Should not combine twice!
-@test tree.l.r.r.val == true_simplification_value

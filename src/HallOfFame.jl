@@ -1,22 +1,32 @@
 module HallOfFameModule
 
 import DynamicExpressions: Node, string_tree
-import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset
+import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
 import ..PopMemberModule: PopMember, copy_pop_member
 import ..LossFunctionsModule: eval_loss
 using Printf: @sprintf
 
-""" List of the best members seen all time in `.members` """
-mutable struct HallOfFame{T<:Real}
-    members::Array{PopMember{T},1}
-    exists::Array{Bool,1} #Whether it has been set
+"""
+HallOfFame{T<:DATA_TYPE,L<:LOSS_TYPE}
 
-    # Arranged by complexity - store one at each.
+List of the best members seen all time in `.members`, with `.members[c]` being
+the best member seen at complexity c. Including only the members which actually
+have been set, you can run `.members[exists]`.
+
+# Fields
+
+- `members::Array{PopMember{T,L},1}`: List of the best members seen all time.
+    These are ordered by complexity, with `.members[1]` the member with complexity 1.
+- `exists::Array{Bool,1}`: Whether the member at the given complexity has been set.
+"""
+mutable struct HallOfFame{T<:DATA_TYPE,L<:LOSS_TYPE}
+    members::Array{PopMember{T,L},1}
+    exists::Array{Bool,1} #Whether it has been set
 end
 
 """
-    HallOfFame(options::Options, ::Type{T}) where {T<:Real}
+    HallOfFame(options::Options, ::Type{T}, ::Type{L}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
 
 Create empty HallOfFame. The HallOfFame stores a list
 of `PopMember` objects in `.members`, which is enumerated
@@ -27,15 +37,19 @@ has been instantiated or not.
 Arguments:
 - `options`: Options containing specification about deterministic.
 - `T`: Type of Nodes to use in the population. e.g., `Float64`.
+- `L`: Type of loss to use in the population. e.g., `Float64`.
 """
-function HallOfFame(options::Options, ::Type{T}) where {T<:Real}
+function HallOfFame(
+    options::Options, ::Type{T}, ::Type{L}
+) where {T<:DATA_TYPE,L<:LOSS_TYPE}
     actualMaxsize = options.maxsize + MAX_DEGREE
-    return HallOfFame(
+    return HallOfFame{T,L}(
         [
             PopMember(
                 Node(; val=convert(T, 1)),
-                T(0),
-                T(Inf);
+                L(0),
+                L(Inf),
+                options;
                 parent=-1,
                 deterministic=options.deterministic,
             ) for i in 1:actualMaxsize
@@ -44,7 +58,9 @@ function HallOfFame(options::Options, ::Type{T}) where {T<:Real}
     )
 end
 
-function copy_hall_of_fame(hof::HallOfFame{T})::HallOfFame{T} where {T<:Real}
+function copy_hall_of_fame(
+    hof::HallOfFame{T,L}
+)::HallOfFame{T,L} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     return HallOfFame(
         [copy_pop_member(member) for member in hof.members],
         [exists for exists in hof.exists],
@@ -52,16 +68,15 @@ function copy_hall_of_fame(hof::HallOfFame{T})::HallOfFame{T} where {T<:Real}
 end
 
 """
-    calculate_pareto_frontier(dataset::AbstractDataset{T}, hallOfFame::HallOfFame{T},
-                            options::Options) where {T<:Real}
+    calculate_pareto_frontier(hallOfFame::HallOfFame{T,L}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
 """
 function calculate_pareto_frontier(
-    dataset::AbstractDataset{T}, hallOfFame::HallOfFame{T}, options::Options
-)::Vector{PopMember{T}} where {T<:Real}
+    hallOfFame::HallOfFame{T,L}
+)::Vector{PopMember{T,L}} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     # TODO - remove dataset from args.
     # Dominating pareto curve - must be better than all simpler equations
-    dominating = PopMember{T}[]
-    actualMaxsize = options.maxsize + MAX_DEGREE
+    dominating = PopMember{T,L}[]
+    actualMaxsize = length(hallOfFame.members)
     for size in 1:actualMaxsize
         if !hallOfFame.exists[size]
             continue
@@ -87,42 +102,24 @@ function calculate_pareto_frontier(
     return dominating
 end
 
-"""
-    calculate_pareto_frontier(X::AbstractMatrix{T}, y::AbstractVector{T},
-                            hallOfFame::HallOfFame{T}, options::Options;
-                            weights=nothing, varMap=nothing) where {T<:Real}
-
-Compute the dominating Pareto frontier for a given hallOfFame. This
-is the list of equations where each equation has a better loss than all
-simpler equations.
-"""
-function calculate_pareto_frontier(
-    X::AbstractMatrix{T},
-    y::AbstractVector{T},
-    hallOfFame::HallOfFame{T},
-    options::Options;
-    weights=nothing,
-    varMap=nothing,
-)::Vector{PopMember{T}} where {T<:Real}
-    return calculate_pareto_frontier(
-        Dataset(X, y; weights=weights, varMap=varMap), hallOfFame, options
-    )
-end
-
-function string_dominating_pareto_curve(hallOfFame, dataset, options)
+function string_dominating_pareto_curve(
+    hallOfFame, dataset, options; width::Union{Integer,Nothing}=nothing
+)
+    twidth = (width === nothing) ? 100 : max(100, width::Integer)
     output = ""
     curMSE = Float64(dataset.baseline_loss)
     lastMSE = curMSE
     lastComplexity = 0
     output *= "Hall of Fame:\n"
-    output *= "-----------------------------------------\n"
+    # TODO: Get user's terminal width.
+    output *= "-"^(twidth - 1) * "\n"
     output *= @sprintf(
         "%-10s  %-8s   %-8s  %-8s\n", "Complexity", "Loss", "Score", "Equation"
     )
 
-    dominating = calculate_pareto_frontier(dataset, hallOfFame, options)
+    dominating = calculate_pareto_frontier(hallOfFame)
     for member in dominating
-        complexity = compute_complexity(member.tree, options)
+        complexity = compute_complexity(member, options)
         if member.loss < 0.0
             throw(
                 DomainError(
@@ -137,18 +134,44 @@ function string_dominating_pareto_curve(hallOfFame, dataset, options)
         ZERO_POINT = 1e-10
         delta_l_mse = log(abs(curMSE / lastMSE) + ZERO_POINT)
         score = convert(Float32, -delta_l_mse / delta_c)
-        output *= @sprintf(
-            "%-10d  %-8.3e  %-8.3e  %-s\n",
-            complexity,
-            curMSE,
-            score,
-            string_tree(member.tree, options.operators, varMap=dataset.varMap)
-        )
+        eqn_string = string_tree(member.tree, options.operators; varMap=dataset.varMap)
+        base_string_length = length(@sprintf("%-10d  %-8.3e  %8.3e  ", 1, 1.0, 1.0))
+
+        dots = "..."
+        equation_width = (twidth - 1) - base_string_length - length(dots)
+
+        output *= @sprintf("%-10d  %-8.3e  %-8.3e  ", complexity, curMSE, score,)
+
+        split_eqn = split_string(eqn_string, equation_width)
+        print_pad = false
+        while length(split_eqn) > 1
+            cur_piece = popfirst!(split_eqn)
+            output *= " "^(print_pad * base_string_length) * cur_piece * dots * "\n"
+            print_pad = true
+        end
+        output *= " "^(print_pad * base_string_length) * split_eqn[1] * "\n"
+
         lastMSE = curMSE
         lastComplexity = complexity
     end
-    output *= "\n"
+    output *= "-"^(twidth - 1)
     return output
+end
+
+"""
+    split_string(s::String, n::Integer)
+
+```jldoctest
+split_string("abcdefgh", 3)
+
+# output
+
+["abc", "def", "gh"]
+```
+"""
+function split_string(s::String, n::Integer)
+    length(s) <= n && return [s]
+    return [s[i:min(i + n - 1, end)] for i in 1:n:length(s)]
 end
 
 end

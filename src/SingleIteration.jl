@@ -1,7 +1,7 @@
 module SingleIterationModule
 
 import DynamicExpressions: string_tree, simplify_tree, combine_operators
-import ..CoreModule: Options, Dataset, AbstractDataset, RecordType
+import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
 import ..UtilsModule: debug
 import ..PopMemberModule: copy_pop_member, generate_reference
@@ -15,22 +15,22 @@ import ..RecorderModule: @recorder
 # Cycle through regularized evolution many times,
 # printing the fittest equation every 10% through
 function s_r_cycle(
-    dataset::AbstractDataset{T},
-    pop::Population,
+    dataset::AbstractDataset{T,L},
+    pop::Population{T,L},
     ncycles::Int,
     curmaxsize::Int,
     running_search_statistics::RunningSearchStatistics;
     verbosity::Int=0,
     options::Options,
     record::RecordType,
-)::Tuple{Population{T},HallOfFame{T},Float64} where {T<:Real}
-    max_temp = T(1.0)
-    min_temp = T(0.0)
+)::Tuple{Population{T,L},HallOfFame{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
+    max_temp = 1.0
+    min_temp = 0.0
     if !options.annealing
         min_temp = max_temp
     end
     all_temperatures = LinRange(max_temp, min_temp, ncycles)
-    best_examples_seen = HallOfFame(options, T)
+    best_examples_seen = HallOfFame(options, T, L)
     num_evals = 0.0
 
     for temperature in all_temperatures
@@ -45,7 +45,7 @@ function s_r_cycle(
         )
         num_evals += tmp_num_evals
         for member in pop.members
-            size = compute_complexity(member.tree, options)
+            size = compute_complexity(member, options)
             score = member.score
             if 0 < size <= options.maxsize && (
                 !best_examples_seen.exists[size] ||
@@ -61,17 +61,21 @@ function s_r_cycle(
 end
 
 function optimize_and_simplify_population(
-    dataset::AbstractDataset{T},
-    pop::Population,
+    dataset::AbstractDataset{T,L},
+    pop::Population{T,L},
     options::Options,
     curmaxsize::Int,
     record::RecordType,
-)::Tuple{Population,Float64} where {T<:Real}
+)::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     array_num_evals = zeros(Float64, pop.n)
     do_optimization = rand(pop.n) .< options.optimizer_probability
     for j in 1:(pop.n)
-        pop.members[j].tree = simplify_tree(pop.members[j].tree, options.operators)
-        pop.members[j].tree = combine_operators(pop.members[j].tree, options.operators)
+        if options.should_simplify
+            tree = pop.members[j].tree
+            tree = simplify_tree(tree, options.operators)
+            tree = combine_operators(tree, options.operators)
+            pop.members[j].tree = tree
+        end
         if options.should_optimize_constants && do_optimization[j]
             pop.members[j], array_num_evals[j] = optimize_constants(
                 dataset, pop.members[j], options

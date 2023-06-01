@@ -9,6 +9,8 @@ export Population,
     AbstractDataset,
     MutationWeights,
     Node,
+    LOSS_TYPE,
+    DATA_TYPE,
 
     #Functions:
     EquationSearch,
@@ -143,6 +145,8 @@ import .CoreModule:
     MAX_DEGREE,
     BATCH_DIM,
     FEATURE_DIM,
+    DATA_TYPE,
+    LOSS_TYPE,
     RecordType,
     Dataset,
     AbstractDataset,
@@ -274,6 +278,10 @@ which is useful for debugging and profiling.
     which will cause `EquationSearch` to return the state. Note that
     you cannot change the operators or dataset, but most other options
     should be changeable.
+- `loss_type::Type=Nothing`: If you would like to use a different type
+    for the loss than for the data you passed, specify the type here.
+    Note that if you pass complex data `::Complex{L}`, then the loss
+    type will automatically be set to `L`.
 
 # Returns
 - `hallOfFame::HallOfFame`: The best equations seen during the search.
@@ -294,9 +302,10 @@ function EquationSearch(
     procs::Union{Vector{Int},Nothing}=nothing,
     addprocs_function::Union{Function,Nothing}=nothing,
     runtests::Bool=true,
-    saved_state::Union{StateType{T},Nothing}=nothing,
+    saved_state::Union{StateType{T,L},Nothing}=nothing,
     multithreaded=nothing,
-) where {T<:Real}
+    loss_type::Type=Nothing,
+) where {T<:DATA_TYPE,L<:LOSS_TYPE}
     if multithreaded !== nothing
         error(
             "`multithreaded` is deprecated. Use the `parallelism` argument instead. " *
@@ -307,12 +316,17 @@ function EquationSearch(
     if weights !== nothing
         weights = reshape(weights, size(y))
     end
+    if T <: Complex && loss_type == Nothing
+        get_base_type(::Type{Complex{BT}}) where {BT} = BT
+        loss_type = get_base_type(T)
+    end
     datasets = [
         Dataset(
             X,
             y[j, :];
             weights=(weights === nothing ? weights : weights[j, :]),
             varMap=varMap,
+            loss_type=loss_type,
         ) for j in 1:nout
     ]
 
@@ -331,7 +345,7 @@ end
 
 function EquationSearch(
     X::AbstractMatrix{T1}, y::AbstractMatrix{T2}; kw...
-) where {T1<:Real,T2<:Real}
+) where {T1<:DATA_TYPE,T2<:DATA_TYPE}
     U = promote_type(T1, T2)
     return EquationSearch(
         convert(AbstractMatrix{U}, X), convert(AbstractMatrix{U}, y); kw...
@@ -340,8 +354,12 @@ end
 
 function EquationSearch(
     X::AbstractMatrix{T1}, y::AbstractVector{T2}; kw...
-) where {T1<:Real,T2<:Real}
+) where {T1<:DATA_TYPE,T2<:DATA_TYPE}
     return EquationSearch(X, reshape(y, (1, size(y, 1))); kw...)
+end
+
+function EquationSearch(dataset::Dataset; kws...)
+    return EquationSearch([dataset]; kws...)
 end
 
 function EquationSearch(
@@ -353,8 +371,8 @@ function EquationSearch(
     procs::Union{Vector{Int},Nothing}=nothing,
     addprocs_function::Union{Function,Nothing}=nothing,
     runtests::Bool=true,
-    saved_state::Union{StateType{T},Nothing}=nothing,
-) where {T<:Real, AD<:AbstractDataset{T}}
+    saved_state::Union{StateType{T,L},Nothing}=nothing,
+) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
     concurrency = if parallelism in (:multithreading, "multithreading")
         :multithreading
     elseif parallelism in (:multiprocessing, "multiprocessing")
@@ -401,8 +419,8 @@ function _EquationSearch(
     procs::Union{Vector{Int},Nothing},
     addprocs_function::Union{Function,Nothing},
     runtests::Bool,
-    saved_state::Union{StateType{T},Nothing},
-) where {T<:Real, AD<:AbstractDataset{T}}
+    saved_state::Union{StateType{T,L},Nothing},
+) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
     if options.deterministic
         if parallelism != :serial
             error("Determinism is only guaranteed for serial mode.")
@@ -487,6 +505,7 @@ function _EquationSearch(
 
     actualMaxsize = options.maxsize + MAX_DEGREE
 
+    # TODO: Should really be one per population too.
     all_running_search_statistics = [
         RunningSearchStatistics(; options=options) for i in 1:nout
     ]
@@ -540,10 +559,21 @@ function _EquationSearch(
 
     hallOfFame = load_saved_hall_of_fame(saved_state)
     if hallOfFame === nothing
-        hallOfFame = [HallOfFame(options, T) for j in 1:nout]
+        hallOfFame = [HallOfFame(options, T, L) for j in 1:nout]
+    else
+        # Recompute losses for the hall of fame, in
+        # case the dataset changed:
+        hallOfFame::Vector{HallOfFame{T,L}}
+        for (hof, dataset) in zip(hallOfFame, datasets)
+            for member in hof.members[hof.exists]
+                score, result_loss = score_func(dataset, member, options)
+                member.score = score
+                member.loss = result_loss
+            end
+        end
     end
     @assert length(hallOfFame) == nout
-    hallOfFame::Vector{HallOfFame{T}}
+    hallOfFame::Vector{HallOfFame{T,L}}
 
     for j in 1:nout
         for i in 1:(options.npopulations)
@@ -555,9 +585,16 @@ function _EquationSearch(
             saved_pop = load_saved_population(saved_state; out=j, pop=i)
 
             if saved_pop !== nothing && length(saved_pop.members) == options.npop
-                saved_pop::Population{T}
+                saved_pop::Population{T,L}
+                ## Update losses:
+                for member in saved_pop.members
+                    score, result_loss = score_func(datasets[j], member, options)
+                    member.score = score
+                    member.loss = result_loss
+                end
+                copy_pop = copy_population(saved_pop)
                 new_pop = @sr_spawner parallelism worker_idx (
-                    saved_pop, HallOfFame(options, T), RecordType(), 0.0
+                    copy_pop, HallOfFame(options, T, L), RecordType(), 0.0
                 )
             else
                 if saved_pop !== nothing
@@ -571,7 +608,7 @@ function _EquationSearch(
                         options=options,
                         nfeatures=datasets[j].nfeatures,
                     ),
-                    HallOfFame(options, T),
+                    HallOfFame(options, T, L),
                     RecordType(),
                     Float64(options.npop),
                 )
@@ -594,6 +631,7 @@ function _EquationSearch(
 
             # TODO - why is this needed??
             # Multi-threaded doesn't like to fetch within a new task:
+            c_rss = deepcopy(running_search_statistics)
             updated_pop = @sr_spawner parallelism worker_idx let
                 in_pop = if parallelism in (:multiprocessing, :multithreading)
                     fetch(init_pops[j][i])[1]
@@ -606,13 +644,13 @@ function _EquationSearch(
                     "iteration0" => record_population(in_pop, options)
                 )
                 tmp_num_evals = 0.0
-                normalize_frequencies!(running_search_statistics)
+                normalize_frequencies!(c_rss)
                 tmp_pop, tmp_best_seen, evals_from_cycle = s_r_cycle(
                     dataset,
                     in_pop,
                     options.ncycles_per_iteration,
                     curmaxsize,
-                    running_search_statistics;
+                    c_rss;
                     verbosity=options.verbosity,
                     options=options,
                     record=cur_record,
@@ -625,7 +663,7 @@ function _EquationSearch(
                 if options.batching
                     for i_member in 1:(options.maxsize + MAX_DEGREE)
                         score, result_loss = score_func(
-                            dataset, tmp_best_seen.members[i_member].tree, options
+                            dataset, tmp_best_seen.members[i_member], options
                         )
                         tmp_best_seen.members[i_member].score = score
                         tmp_best_seen.members[i_member].loss = result_loss
@@ -651,7 +689,9 @@ function _EquationSearch(
     end
 
     last_print_time = time()
-    num_equations = 0.0
+    last_speed_recording_time = time()
+    num_evals_last = sum(sum, num_evals)
+    num_evals_since_last = sum(sum, num_evals) - num_evals_last
     print_every_n_seconds = 5
     equation_speed = Float32[]
 
@@ -710,11 +750,11 @@ function _EquationSearch(
                 else
                     allPops[j][i]
                 end
-            returnPops[j][i] = cur_pop
             cur_pop::Population
             best_seen::HallOfFame
             cur_record::RecordType
             cur_num_evals::Float64
+            returnPops[j][i] = copy_population(cur_pop)
             bestSubPops[j][i] = best_sub_pop(cur_pop; topn=options.topn)
             @recorder record = recursive_merge(record, cur_record)
             num_evals[j][i] += cur_num_evals
@@ -733,7 +773,7 @@ function _EquationSearch(
                 Iterators.flatten((cur_pop.members, best_seen.members[best_seen.exists]))
             )
                 part_of_cur_pop = i_member <= length(cur_pop.members)
-                size = compute_complexity(member.tree, options)
+                size = compute_complexity(member, options)
 
                 if part_of_cur_pop
                     update_frequencies!(all_running_search_statistics[j]; size=size)
@@ -753,7 +793,7 @@ function _EquationSearch(
             ###################################################################
 
             # Dominating pareto curve - must be better than all simpler equations
-            dominating = calculate_pareto_frontier(dataset, hallOfFame[j], options)
+            dominating = calculate_pareto_frontier(hallOfFame[j])
 
             if options.save_to_file
                 output_file = options.output_file
@@ -767,14 +807,13 @@ function _EquationSearch(
                         for member in dominating
                             println(
                                 io,
-                                "$(compute_complexity(member.tree, options)),$(member.loss),\"" *
+                                "$(compute_complexity(member, options)),$(member.loss),\"" *
                                 "$(string_tree(member.tree, options.operators, varMap=dataset.varMap))\"",
                             )
                         end
                     end
                 end
             end
-
             ###################################################################
             # Migration #######################################################
             if options.migration
@@ -800,19 +839,24 @@ function _EquationSearch(
                 iteration = find_iteration_from_record(key, record) + 1
             end
 
+            c_rss = deepcopy(all_running_search_statistics[j])
+            c_cur_pop = copy_population(cur_pop)
             allPops[j][i] = @sr_spawner parallelism worker_idx let
                 cur_record = RecordType()
                 @recorder cur_record[key] = RecordType(
-                    "iteration$(iteration)" => record_population(cur_pop, options)
+                    "iteration$(iteration)" => record_population(c_cur_pop, options)
                 )
                 tmp_num_evals = 0.0
-                normalize_frequencies!(all_running_search_statistics[j])
+                normalize_frequencies!(c_rss)
+                # TODO: Could the dataset objects themselves be modified during the search??
+                # Perhaps inside the evaluation kernels?
+                # It shouldn't be too expensive to copy the dataset.
                 tmp_pop, tmp_best_seen, evals_from_cycle = s_r_cycle(
                     dataset,
-                    cur_pop,
+                    c_cur_pop,
                     options.ncycles_per_iteration,
                     curmaxsize,
-                    all_running_search_statistics[j];
+                    c_rss;
                     verbosity=options.verbosity,
                     options=options,
                     record=cur_record,
@@ -828,7 +872,7 @@ function _EquationSearch(
                     for i_member in 1:(options.maxsize + MAX_DEGREE)
                         if tmp_best_seen.exists[i_member]
                             score, result_loss = score_func(
-                                dataset, tmp_best_seen.members[i_member].tree, options
+                                dataset, tmp_best_seen.members[i_member], options
                             )
                             tmp_best_seen.members[i_member].score = score
                             tmp_best_seen.members[i_member].loss = result_loss
@@ -857,17 +901,16 @@ function _EquationSearch(
                         )
                 end
             end
-            num_equations += options.ncycles_per_iteration * options.npop / 10.0
-
             stop_work_monitor!(resource_monitor)
             move_window!(all_running_search_statistics[j])
             if options.progress && nout == 1
                 head_node_occupation = estimate_work_fraction(resource_monitor)
                 update_progress_bar!(
-                    progress_bar;
-                    hall_of_fame=only(hallOfFame),
-                    dataset=only(datasets),
+                    progress_bar,
+                    only(hallOfFame),
+                    only(datasets),
                     options,
+                    equation_speed,
                     head_node_occupation,
                     parallelism,
                 )
@@ -876,18 +919,31 @@ function _EquationSearch(
         sleep(1e-6)
 
         ################################################################
-        ## Printing code
-        elapsed = time() - last_print_time
-        #Update if time has passed, and some new equations generated.
-        if elapsed > print_every_n_seconds && num_equations > 0.0
-            # Dominating pareto curve - must be better than all simpler equations
-            current_speed = num_equations / elapsed
-            average_over_m_measurements = 10 #for print_every...=5, this gives 50 second running average
+        ## Search statistics
+        elapsed_since_speed_recording = time() - last_speed_recording_time
+        if elapsed_since_speed_recording > 1.0
+            num_evals_since_last, num_evals_last = let s = sum(sum, num_evals)
+                s - num_evals_last, s
+            end
+            current_speed = num_evals_since_last / elapsed_since_speed_recording
             push!(equation_speed, current_speed)
+            average_over_m_measurements = 20 # 20 second running average
             if length(equation_speed) > average_over_m_measurements
                 deleteat!(equation_speed, 1)
             end
-            if (options.verbosity > 0) || (options.progress && nout > 1)
+            last_speed_recording_time = time()
+        end
+        ################################################################
+
+        ################################################################
+        ## Printing code
+        elapsed = time() - last_print_time
+        # Update if time has passed
+        if elapsed > print_every_n_seconds
+            if ((options.verbosity > 0) || (options.progress && nout > 1)) &&
+                length(equation_speed) > 0
+
+                # Dominating pareto curve - must be better than all simpler equations
                 head_node_occupation = estimate_work_fraction(resource_monitor)
                 print_search_state(
                     hallOfFame,
@@ -898,17 +954,17 @@ function _EquationSearch(
                     cycles_remaining,
                     head_node_occupation,
                     parallelism,
+                    width=options.terminal_width,
                 )
             end
             last_print_time = time()
-            num_equations = 0.0
         end
         ################################################################
 
         ################################################################
         ## Early stopping code
         if any((
-            check_for_loss_threshold(datasets, hallOfFame, options),
+            check_for_loss_threshold(hallOfFame, options),
             check_for_user_quit(stdin_reader),
             check_for_timeout(start_time, options),
             check_max_evals(num_evals, options),
@@ -920,10 +976,14 @@ function _EquationSearch(
 
     close_reader!(stdin_reader)
 
-    if we_created_procs
-        rmprocs(procs)
+    # Safely close all processes or threads
+    if parallelism == :multiprocessing
+        we_created_procs && rmprocs(procs)
+    elseif parallelism == :multithreading
+        for j in 1:nout, i in 1:(options.npopulations)
+            wait(allPops[j][i])
+        end
     end
-    # TODO - also stop threads here?
 
     ##########################################################################
     ### Distributed code^
@@ -937,7 +997,7 @@ function _EquationSearch(
 
     if options.return_state
         state = (returnPops, (nout == 1 ? only(hallOfFame) : hallOfFame))
-        state::StateType{T}
+        state::StateType{T,L}
         return state
     else
         if nout == 1

@@ -2,24 +2,25 @@ module RegularizedEvolutionModule
 
 import Random: shuffle!
 import DynamicExpressions: string_tree
-import ..CoreModule: Options, Dataset, AbstractDataset, RecordType
+import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
 import ..PopMemberModule: PopMember
 import ..PopulationModule: Population, best_of_sample
 import ..AdaptiveParsimonyModule: RunningSearchStatistics
 import ..MutateModule: next_generation, crossover_generation
 import ..RecorderModule: @recorder
+import ..UtilsModule: argmin_fast
 
 # Pass through the population several times, replacing the oldest
 # with the fittest of a small subsample
 function reg_evol_cycle(
-    dataset::AbstractDataset{T},
-    pop::Population,
-    temperature::T,
+    dataset::AbstractDataset{T,L},
+    pop::Population{T,L},
+    temperature,
     curmaxsize::Int,
     running_search_statistics::RunningSearchStatistics,
     options::Options,
     record::RecordType,
-)::Tuple{Population,Float64} where {T<:Real}
+)::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     # Batch over each subsample. Can give 15% improvement in speed; probably moreso for large pops.
     # but is ultimately a different algorithm than regularized evolution, and might not be
     # as good.
@@ -28,6 +29,7 @@ function reg_evol_cycle(
     end
 
     num_evals = 0.0
+    n_evol_cycles = ceil(Int, pop.n / options.tournament_selection_n)
 
     if options.fast_cycle
 
@@ -39,7 +41,6 @@ function reg_evol_cycle(
         @assert options.crossover_probability == 0.0
 
         shuffle!(pop.members)
-        n_evol_cycles = round(Int, pop.n / options.tournament_selection_n)
         babies = Array{PopMember}(undef, n_evol_cycles)
         accepted = Array{Bool}(undef, n_evol_cycles)
         array_num_evals = Array{Float64}(undef, n_evol_cycles)
@@ -72,13 +73,13 @@ function reg_evol_cycle(
 
         # Replace the n_evol_cycles-oldest members of each population
         for i in 1:n_evol_cycles
-            oldest = argmin([pop.members[member].birth for member in 1:(pop.n)])
+            oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
             if accepted[i] || !options.skip_mutation_failures
                 pop.members[oldest] = babies[i]
             end
         end
     else
-        for i in 1:round(Int, pop.n / options.tournament_selection_n)
+        for i in 1:n_evol_cycles
             if rand() > options.crossover_probability
                 allstar = best_of_sample(pop, running_search_statistics, options)
                 mutation_recorder = RecordType()
@@ -98,7 +99,7 @@ function reg_evol_cycle(
                     continue
                 end
 
-                oldest = argmin([pop.members[member].birth for member in 1:(pop.n)])
+                oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
 
                 @recorder begin
                     if !haskey(record, "mutations")
@@ -147,9 +148,9 @@ function reg_evol_cycle(
                 end
 
                 # Replace old members with new ones:
-                oldest = argmin([pop.members[member].birth for member in 1:(pop.n)])
+                oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
                 pop.members[oldest] = baby1
-                oldest = argmin([pop.members[member].birth for member in 1:(pop.n)])
+                oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
                 pop.members[oldest] = baby2
             end
         end

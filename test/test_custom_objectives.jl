@@ -23,6 +23,8 @@ options = Options(;
     mutation_weights=MutationWeights(; optimize=0.01),
 )
 
+@test options.should_simplify == false
+
 X = rand(2, 100) .* 10
 y = X[1, :] .+ X[2, :]
 
@@ -32,7 +34,7 @@ y = X[1, :] .+ X[2, :]
 hall_of_fame = EquationSearch(
     X, y; niterations=100, options=options, parallelism=:multiprocessing, numprocs=1
 )
-dominating = calculate_pareto_frontier(X, y, hall_of_fame, options)
+dominating = calculate_pareto_frontier(hall_of_fame)
 
 testX = rand(2, 100) .* 10
 expected_y = 0.5 .* (testX[1, :] .+ testX[2, :])

@@ -1,6 +1,8 @@
 module OptionsModule
 
 using Optim: Optim
+using Dates: Dates
+using StatsBase: StatsBase
 import DynamicExpressions: OperatorEnum, Node, string_tree
 import Distributed: nworkers
 import LossFunctions: L2DistLoss
@@ -257,6 +259,8 @@ https://github.com/MilesCranmer/PySR/discussions/115.
     migrated equations at the end of each cycle.
 - `fraction_replaced_hof`: What fraction to replace with hall of fame
     equations at the end of each cycle.
+- `should_simplify`: Whether to simplify equations. If you
+    pass a custom objective, this will be set to `false`.
 - `should_optimize_constants`: Whether to use an optimization algorithm
     to periodically optimize constants in equations.
 - `optimizer_nrestarts`: How many different random starting positions to consider
@@ -332,6 +336,7 @@ function Options(;
     turbo=false,
     migration=true,
     hof_migration=true,
+    should_simplify=nothing,
     should_optimize_constants=true,
     output_file=nothing,
     npopulations=15,
@@ -339,7 +344,7 @@ function Options(;
     annealing=false,
     batching=false,
     batch_size=50,
-    mutation_weights::Union{MutationWeights,AbstractVector}=MutationWeights(),
+    mutation_weights::Union{MutationWeights,AbstractVector,NamedTuple}=MutationWeights(),
     crossover_probability=0.066f0,
     warmup_maxsize_by=0.0f0,
     use_frequency=true,
@@ -438,8 +443,20 @@ function Options(;
     #     end
     end
 
+    if should_simplify === nothing
+        should_simplify = (
+            loss_function === nothing &&
+            nested_constraints === nothing &&
+            constraints === nothing &&
+            bin_constraints === nothing &&
+            una_constraints === nothing
+        )
+    end
+
     if output_file === nothing
-        output_file = "hall_of_fame.csv" #TODO - put in date/time string here
+        # "%Y-%m-%d_%H%M%S.%f"
+        date_time_str = Dates.format(Dates.now(), "yyyy-mm-dd_HHMMSS.sss")
+        output_file = "hall_of_fame_" * date_time_str * ".csv"
     end
 
     nuna = length(unary_operators)
@@ -584,6 +601,18 @@ function Options(;
         npopulations = nworkers()
     end
 
+    if define_helper_functions
+        # We call here so that mapped operators, like ^
+        # are correctly overloaded, rather than overloading
+        # operators like "safe_pow", etc.
+        OperatorEnum(;
+            binary_operators=binary_operators,
+            unary_operators=unary_operators,
+            enable_autodiff=false,  # Not needed; we just want the constructors
+            define_helper_functions=true,
+        )
+    end
+
     binary_operators = map(binopmap, binary_operators)
     unary_operators = map(unaopmap, unary_operators)
 
@@ -626,19 +655,42 @@ function Options(;
         end
     end
 
-    if length(predefined_nodes) > 0 && mutation_weights.replace_with_predefined_node < 1e-6
-        mutation_weights.replace_with_predefined_node = 0.5
-    elseif length(predefined_nodes) == 0
-        mutation_weights.replace_with_predefined_node = 0.0
+    ## Create tournament weights:6
+    tournament_selection_weights =
+        let n = tournament_selection_n, p = tournament_selection_p
+            k = collect(0:(n - 1))
+            prob_each = p * ((1 - p) .^ k)
+
+            StatsBase.Weights(prob_each, sum(prob_each))
+        end
+
+    # Create mutation weights:
+    set_mutation_weights = if typeof(mutation_weights) <: NamedTuple
+        MutationWeights(; mutation_weights...)
+    else
+        mutation_weights
     end
 
-    options = Options{eltype(complexity_mapping)}(
+    if length(predefined_nodes) > 0 && mutation_weights.replace_with_predefined_node < 1e-6
+        set_mutation_weights.replace_with_predefined_node = 0.5
+    elseif length(predefined_nodes) == 0
+        set_mutation_weights.replace_with_predefined_node = 0.0
+    end
+
+    options = Options{
+        eltype(complexity_mapping),
+        typeof(optimizer_options),
+        typeof(elementwise_loss),
+        typeof(loss_function),
+        typeof(tournament_selection_weights),
+    }(
         operators,
         bin_constraints,
         una_constraints,
         complexity_mapping,
         tournament_selection_n,
         tournament_selection_p,
+        tournament_selection_weights,
         parsimony,
         alpha,
         maxsize,
@@ -647,6 +699,7 @@ function Options(;
         turbo,
         migration,
         hof_migration,
+        should_simplify,
         should_optimize_constants,
         output_file,
         npopulations,
@@ -654,7 +707,7 @@ function Options(;
         annealing,
         batching,
         batch_size,
-        mutation_weights,
+        set_mutation_weights,
         crossover_probability,
         warmup_maxsize_by,
         use_frequency,
