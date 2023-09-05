@@ -15,7 +15,7 @@ for unaop in [cos, exp, safe_log, safe_log2, safe_log10, safe_sqrt, relu, gamma,
                 default_params...,
                 binary_operators=(+, *, ^, /, binop),
                 unary_operators=(unaop, abs),
-                npopulations=4,
+                populations=4,
                 verbosity=(unaop == gamma) ? 0 : Int(1e9),
                 kw...,
             )
@@ -28,20 +28,16 @@ for unaop in [cos, exp, safe_log, safe_log2, safe_log10, safe_sqrt, relu, gamma,
 
         # binop at outside:
         const_tree = Node(
-            5,
-            safe_pow(Node(2, Node(; val=3.0) * Node(1, Node("x1"))), 2.0),
-            Node(; val=-1.2),
+            5, (^)(Node(2, Node(; val=3.0) * Node(1, Node("x1"))), 2.0), Node(; val=-1.2)
         )
         const_tree_bad = Node(
-            5,
-            safe_pow(Node(2, Node(; val=3.0) * Node(1, Node("x1"))), 2.1),
-            Node(; val=-1.3),
+            5, (^)(Node(2, Node(; val=3.0) * Node(1, Node("x1"))), 2.1), Node(; val=-1.3)
         )
         n = count_nodes(const_tree)
 
         true_result = f_true(x1)
 
-        result = eval(Meta.parse(string_tree(const_tree, make_options().operators)))
+        result = eval(Meta.parse(string_tree(const_tree, make_options())))
 
         # Test Basics
         @test n == 9

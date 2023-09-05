@@ -9,11 +9,13 @@ export Population,
     AbstractDataset,
     MutationWeights,
     Node,
+    SRRegressor,
+    MultitargetSRRegressor,
     LOSS_TYPE,
     DATA_TYPE,
 
     #Functions:
-    EquationSearch,
+    equation_search,
     s_r_cycle,
     calculate_pareto_frontier,
     count_nodes,
@@ -29,6 +31,7 @@ export Population,
     node_to_symbolic,
     symbolic_to_node,
     simplify_tree,
+    tree_mapreduce,
     combine_operators,
     gen_random_tree,
     gen_random_tree_fixed_size,
@@ -62,9 +65,8 @@ export Population,
     atanh_clip
 
 using Distributed
-using JSON3: JSON3
 import Printf: @printf, @sprintf
-import Requires: @init, @require
+import PackageExtensionCompat: @require_extensions
 using Pkg: Pkg
 import TOML: parsefile
 import Random: seed!, shuffle!
@@ -87,7 +89,9 @@ import DynamicExpressions:
     node_to_symbolic,
     symbolic_to_node,
     combine_operators,
-    simplify_tree
+    simplify_tree,
+    tree_mapreduce,
+    set_default_variable_names!
 @reexport import LossFunctions:
     MarginLoss,
     DistanceLoss,
@@ -117,16 +121,30 @@ import DynamicExpressions:
     LogCoshLoss
 
 # https://discourse.julialang.org/t/how-to-find-out-the-version-of-a-package-from-its-module/37755/15
-const PACKAGE_VERSION = let
-    project = parsefile(joinpath(pkgdir(@__MODULE__), "Project.toml"))
-    VersionNumber(project["version"])
+const PACKAGE_VERSION = try
+    let project = parsefile(joinpath(pkgdir(@__MODULE__), "Project.toml"))
+        VersionNumber(project["version"])
+    end
+catch
+    VersionNumber(0, 0, 0)
 end
 
+function deprecate_varmap(variable_names, varMap, func_name)
+    if varMap !== nothing
+        Base.depwarn("`varMap` is deprecated; use `variable_names` instead", func_name)
+        @assert variable_names === nothing "Cannot pass both `varMap` and `variable_names`"
+        variable_names = varMap
+    end
+    return variable_names
+end
+
+include("Utils.jl")
+include("InterfaceDynamicQuantities.jl")
 include("Core.jl")
 include("InterfaceDynamicExpressions.jl")
 include("Recorder.jl")
-include("Utils.jl")
 include("Complexity.jl")
+include("DimensionalAnalysis.jl")
 include("CheckConstraints.jl")
 include("AdaptiveParsimony.jl")
 include("MutationFunctions.jl")
@@ -177,7 +195,8 @@ import .CoreModule:
     erf,
     erfc,
     atanh_clip
-import .UtilsModule: debug, debug_inline, is_anonymous_function, recursive_merge
+import .UtilsModule:
+    debug, debug_inline, is_anonymous_function, recursive_merge, json3_write
 import .ComplexityModule: compute_complexity
 import .CheckConstraintsModule: check_constraints
 import .AdaptiveParsimonyModule:
@@ -215,15 +234,15 @@ import .SearchUtilsModule:
     update_progress_bar!,
     print_search_state,
     init_dummy_pops,
-    StateType,
     load_saved_hall_of_fame,
-    load_saved_population
+    load_saved_population,
+    construct_datasets
 
+include("deprecates.jl")
 include("Configure.jl")
-include("Deprecates.jl")
 
 """
-    EquationSearch(X, y[; kws...])
+    equation_search(X, y[; kws...])
 
 Perform a distributed equation search for functions `f_i` which
 describe the mapping `f_i(X[:, j]) ≈ y[i, j]`. Options are
@@ -242,10 +261,16 @@ which is useful for debugging and profiling.
     More iterations will improve the results.
 - `weights::Union{AbstractMatrix{T}, AbstractVector{T}, Nothing}=nothing`: Optionally
     weight the loss for each `y` by this value (same shape as `y`).
-- `varMap::Union{Vector{String}, Nothing}=nothing`: The names
-    of each feature in `X`, which will be used during printing of equations.
 - `options::Options=Options()`: The options for the search, such as
     which operators to use, evolution hyperparameters, etc.
+- `variable_names::Union{Vector{String}, Nothing}=nothing`: The names
+    of each feature in `X`, which will be used during printing of equations.
+- `display_variable_names::Union{Vector{String}, Nothing}=variable_names`: Names
+    to use when printing expressions during the search, but not when saving
+    to an equation file.
+- `y_variable_names::Union{String,AbstractVector{String},Nothing}=nothing`: The
+    names of each output feature in `y`, which will be used during printing
+    of equations.
 - `parallelism=:multithreading`: What parallelism mode to use.
     The options are `:multithreading`, `:multiprocessing`, and `:serial`.
     By default, multithreading will be used. Multithreading uses less memory,
@@ -256,7 +281,7 @@ which is useful for debugging and profiling.
     to the `procs` argument and they will be used.
     You may also pass a string instead of a symbol, like `"multithreading"`.
 - `numprocs::Union{Int, Nothing}=nothing`:  The number of processes to use,
-    if you want `EquationSearch` to set this up automatically. By default
+    if you want `equation_search` to set this up automatically. By default
     this will be `4`, but can be any number (you should pick a number <=
     the number of cores available).
 - `procs::Union{Vector{Int}, Nothing}=nothing`: If you have set up
@@ -273,16 +298,29 @@ which is useful for debugging and profiling.
 - `runtests::Bool=true`: Whether to run (quick) tests before starting the
     search, to see if there will be any problems during the equation search
     related to the host environment.
-- `saved_state::Union{StateType, Nothing}=nothing`: If you have already
-    run `EquationSearch` and want to resume it, pass the state here.
-    To get this to work, you need to have return_state=true in the options,
-    which will cause `EquationSearch` to return the state. Note that
-    you cannot change the operators or dataset, but most other options
+- `saved_state=nothing`: If you have already
+    run `equation_search` and want to resume it, pass the state here.
+    To get this to work, you need to have set return_state=true,
+    which will cause `equation_search` to return the state. The second
+    element of the state is the regular return value with the hall of fame.
+    Note that you cannot change the operators or dataset, but most other options
     should be changeable.
+- `return_state::Union{Bool, Nothing}=nothing`: Whether to return the
+    state of the search for warm starts. By default this is false.
 - `loss_type::Type=Nothing`: If you would like to use a different type
     for the loss than for the data you passed, specify the type here.
     Note that if you pass complex data `::Complex{L}`, then the loss
     type will automatically be set to `L`.
+- `verbosity`: Whether to print debugging statements or not.
+- `progress`: Whether to use a progress bar output. Only available for
+    single target output.
+- `X_units::Union{AbstractVector,Nothing}=nothing`: The units of the dataset,
+    to be used for dimensional constraints. For example, if `X_units=["kg", "m"]`,
+    then the first feature will have units of kilograms, and the second will
+    have units of meters.
+- `y_units=nothing`: The units of the output, to be used for dimensional constraints.
+    If `y` is a matrix, then this can be a vector of units, in which case
+    each element corresponds to each output feature.
 
 # Returns
 - `hallOfFame::HallOfFame`: The best equations seen during the search.
@@ -291,47 +329,62 @@ which is useful for debugging and profiling.
     is given in `.score`. The array of `PopMember` objects
     is enumerated by size from `1` to `options.maxsize`.
 """
-function EquationSearch(
+function equation_search(
     X::AbstractMatrix{T},
     y::AbstractMatrix{T};
     niterations::Int=10,
     weights::Union{AbstractMatrix{T},AbstractVector{T},Nothing}=nothing,
-    varMap::Union{Vector{String},Nothing}=nothing,
     options::Options=Options(),
+    variable_names::Union{AbstractVector{String},Nothing}=nothing,
+    display_variable_names::Union{AbstractVector{String},Nothing}=variable_names,
+    y_variable_names::Union{String,AbstractVector{String},Nothing}=nothing,
     parallelism=:multithreading,
     numprocs::Union{Int,Nothing}=nothing,
     procs::Union{Vector{Int},Nothing}=nothing,
     addprocs_function::Union{Function,Nothing}=nothing,
     runtests::Bool=true,
-    saved_state::Union{StateType{T,L},Nothing}=nothing,
+    saved_state=nothing,
+    return_state::Union{Bool,Nothing}=nothing,
+    loss_type::Type{Linit}=Nothing,
+    verbosity::Union{Integer,Nothing}=nothing,
+    progress::Union{Bool,Nothing}=nothing,
+    X_units::Union{AbstractVector,Nothing}=nothing,
+    y_units=nothing,
+    v_dim_out::Val{dim_out}=Val(nothing),
+    # Deprecated:
     multithreaded=nothing,
-    loss_type::Type=Nothing,
-) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+    varMap=nothing,
+) where {T<:DATA_TYPE,Linit,dim_out}
     if multithreaded !== nothing
         error(
             "`multithreaded` is deprecated. Use the `parallelism` argument instead. " *
             "Choose one of :multithreaded, :multiprocessing, or :serial.",
         )
     end
-    nout = size(y, FEATURE_DIM)
+    variable_names = deprecate_varmap(variable_names, varMap, :equation_search)
+
     if weights !== nothing
+        @assert length(weights) == length(y)
         weights = reshape(weights, size(y))
     end
     if T <: Complex && loss_type == Nothing
         get_base_type(::Type{Complex{BT}}) where {BT} = BT
         loss_type = get_base_type(T)
     end
-    datasets = [
-        Dataset(
-            X,
-            y[j, :];
-            weights=(weights === nothing ? weights : weights[j, :]),
-            varMap=varMap,
-            loss_type=loss_type,
-        ) for j in 1:nout
-    ]
 
-    return EquationSearch(
+    datasets = construct_datasets(
+        X,
+        y,
+        weights,
+        variable_names,
+        display_variable_names,
+        y_variable_names,
+        X_units,
+        y_units,
+        loss_type,
+    )
+
+    return equation_search(
         datasets;
         niterations=niterations,
         options=options,
@@ -341,30 +394,34 @@ function EquationSearch(
         addprocs_function=addprocs_function,
         runtests=runtests,
         saved_state=saved_state,
+        return_state=return_state,
+        verbosity=verbosity,
+        progress=progress,
+        v_dim_out=Val(dim_out),
     )
 end
 
-function EquationSearch(
+function equation_search(
     X::AbstractMatrix{T1}, y::AbstractMatrix{T2}; kw...
 ) where {T1<:DATA_TYPE,T2<:DATA_TYPE}
     U = promote_type(T1, T2)
-    return EquationSearch(
+    return equation_search(
         convert(AbstractMatrix{U}, X), convert(AbstractMatrix{U}, y); kw...
     )
 end
 
-function EquationSearch(
+function equation_search(
     X::AbstractMatrix{T1}, y::AbstractVector{T2}; kw...
 ) where {T1<:DATA_TYPE,T2<:DATA_TYPE}
-    return EquationSearch(X, reshape(y, (1, size(y, 1))); kw...)
+    return equation_search(X, reshape(y, (1, size(y, 1))); kw..., v_dim_out=Val(1))
 end
 
-function EquationSearch(dataset::Dataset; kws...)
-    return EquationSearch([dataset]; kws...)
+function equation_search(dataset::Dataset; kws...)
+    return equation_search([dataset]; kws..., v_dim_out=Val(1))
 end
 
-function EquationSearch(
-    datasets::Vector{AD};
+function equation_search(
+    datasets::Vector{D};
     niterations::Int=10,
     options::Options=Options(),
     parallelism=:multithreading,
@@ -372,14 +429,18 @@ function EquationSearch(
     procs::Union{Vector{Int},Nothing}=nothing,
     addprocs_function::Union{Function,Nothing}=nothing,
     runtests::Bool=true,
-    saved_state::Union{StateType{T,L},Nothing}=nothing,
-) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
-    concurrency = if parallelism in (:multithreading, "multithreading")
-        :multithreading
+    saved_state=nothing,
+    return_state::Union{Bool,Nothing}=nothing,
+    verbosity::Union{Int,Nothing}=nothing,
+    progress::Union{Bool,Nothing}=nothing,
+    v_dim_out::Val{dim_out}=Val(nothing),
+) where {dim_out,T<:DATA_TYPE,L<:LOSS_TYPE,D<:AbstractDataset{T,L}}
+    v_concurrency, concurrency = if parallelism in (:multithreading, "multithreading")
+        (Val(:multithreading), :multithreading)
     elseif parallelism in (:multiprocessing, "multiprocessing")
-        :multiprocessing
+        (Val(:multiprocessing), :multiprocessing)
     elseif parallelism in (:serial, "serial")
-        :serial
+        (Val(:serial), :serial)
     else
         error(
             "Invalid parallelism mode: $parallelism. " *
@@ -398,30 +459,85 @@ function EquationSearch(
             "`numprocs` should not be set when using `parallelism=$(parallelism)`. Please use `:multiprocessing`.",
         )
 
-    return _EquationSearch(
-        concurrency,
-        datasets;
-        niterations=niterations,
-        options=options,
-        numprocs=numprocs,
-        procs=procs,
-        addprocs_function=addprocs_function,
-        runtests=runtests,
-        saved_state=saved_state,
+    # TODO: Still not type stable. Should be able to pass `Val{return_state}`.
+    should_return_state = if options.return_state === nothing
+        return_state === nothing ? false : return_state
+    else
+        @assert(
+            return_state === nothing,
+            "You cannot set `return_state` in both the `Options` and in the passed arguments."
+        )
+        options.return_state
+    end
+
+    _v_dim_out = if dim_out === nothing
+        length(datasets) > 1 ? Val(2) : Val(1)
+    else
+        Val(dim_out)
+    end
+
+    verbosity = if verbosity === nothing && options.verbosity === nothing
+        1
+    elseif verbosity === nothing
+        options.verbosity
+    elseif options.verbosity === nothing
+        verbosity
+    else
+        error(
+            "You cannot set `verbosity` in both the search parameters `Options` and the call to `equation_search`.",
+        )
+    end
+    progress = if progress === nothing && options.progress === nothing
+        (verbosity > 0) && length(datasets) == 1
+    elseif progress === nothing
+        options.progress
+    elseif options.progress === nothing
+        progress
+    else
+        error(
+            "You cannot set `progress` in both the search parameters `Options` and the call to `equation_search`.",
+        )
+    end
+    if progress
+        @assert(
+            length(datasets) == 1,
+            "You cannot display a progress bar for multi-output searches."
+        )
+        @assert(verbosity > 0, "You cannot display a progress bar with `verbosity=0`.")
+    end
+
+    return _equation_search(
+        v_concurrency,
+        _v_dim_out,
+        datasets,
+        niterations,
+        options,
+        numprocs,
+        procs,
+        addprocs_function,
+        runtests,
+        saved_state,
+        verbosity,
+        progress,
+        Val(should_return_state),
     )
 end
 
-function _EquationSearch(
-    parallelism::Symbol,
-    datasets::Vector{AD};
+function _equation_search(
+    ::Val{parallelism},
+    ::Val{dim_out},
+    datasets::Vector{D},
     niterations::Int,
     options::Options,
     numprocs::Union{Int,Nothing},
     procs::Union{Vector{Int},Nothing},
     addprocs_function::Union{Function,Nothing},
     runtests::Bool,
-    saved_state::Union{StateType{T,L},Nothing},
-) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
+    saved_state,
+    verbosity,
+    progress,
+    ::Val{should_return_state},
+) where {T<:DATA_TYPE,L<:LOSS_TYPE,D<:AbstractDataset{T,L},parallelism,should_return_state,dim_out}
     if options.deterministic
         if parallelism != :serial
             error("Determinism is only guaranteed for serial mode.")
@@ -432,33 +548,27 @@ function _EquationSearch(
             @warn "You are using multithreading mode, but only one thread is available. Try starting julia with `--threads=auto`."
         end
     end
+    if any(d -> d.X_units !== nothing || d.y_units !== nothing, datasets)
+        if options.dimensional_constraint_penalty === nothing && saved_state === nothing
+            @warn "You are using dimensional constraints, but `dimensional_constraint_penalty` was not set. The default penalty of `1000.0` will be used."
+        end
+    end
 
     stdin_reader = watch_stream(stdin)
 
-    # Redefine print, show:
-    options.define_helper_functions && @eval begin
-        function Base.print(io::IO, tree::Node)
-            return print(
-                io,
-                string_tree(tree, $(options.operators); varMap=$(datasets[1].varMap)),
-            )
-        end
-        function Base.show(io::IO, tree::Node)
-            return print(
-                io,
-                string_tree(tree, $(options.operators); varMap=$(datasets[1].varMap)),
-            )
-        end
+    if options.define_helper_functions
+        set_default_variable_names!(first(datasets).variable_names)
     end
 
     example_dataset = datasets[1]
     nout = size(datasets, 1)
+    @assert (nout == 1 || dim_out == 2)
 
     if runtests
         test_option_configuration(T, options)
         # Testing the first output variable is the same:
         if typeof(example_dataset) <: Dataset
-            test_dataset_configuration(example_dataset, options)
+            test_dataset_configuration(example_dataset, options, verbosity)
         else
             debug(
                 (options.verbosity > 0 || options.progress),
@@ -486,41 +596,39 @@ function _EquationSearch(
 
     allPops = [allPopsType[] for j in 1:nout]
     init_pops = [allPopsType[] for j in 1:nout]
+    tasks = [Task[] for j in 1:nout]
     # Set up a channel to send finished populations back to head node
-    if parallelism in (:multiprocessing, :multithreading)
-        if parallelism == :multiprocessing
-            channels = [
-                [RemoteChannel(1) for i in 1:(options.npopulations)] for j in 1:nout
-            ]
-        else
-            channels = [[Channel(1) for i in 1:(options.npopulations)] for j in 1:nout]
-        end
-        tasks = [Task[] for j in 1:nout]
+    channels = if parallelism == :multiprocessing
+        [[RemoteChannel(1) for i in 1:(options.populations)] for j in 1:nout]
+    else
+        [[Channel(1) for i in 1:(options.populations)] for j in 1:nout]
+        # (Unused for :serial)
     end
 
     # This is a recorder for populations, but is not actually used for processing, just
     # for the final return.
-    returnPops = init_dummy_pops(nout, options.npopulations, datasets, options)
+    returnPops = init_dummy_pops(options.populations, datasets, options)
     # These initial populations are discarded:
-    bestSubPops = init_dummy_pops(nout, options.npopulations, datasets, options)
+    bestSubPops = init_dummy_pops(options.populations, datasets, options)
 
     actualMaxsize = options.maxsize + MAX_DEGREE
 
     # TODO: Should really be one per population too.
     all_running_search_statistics = [
-        RunningSearchStatistics(; options=options) for i in 1:nout
+        RunningSearchStatistics(; options=options) for j in 1:nout
     ]
 
-    curmaxsizes = [3 for j in 1:nout]
     record = RecordType("options" => "$(options)")
 
-    if options.warmup_maxsize_by == 0.0f0
-        curmaxsizes = [options.maxsize for j in 1:nout]
+    curmaxsizes = if iszero(options.warmup_maxsize_by)
+        fill(options.maxsize, nout)
+    else
+        fill(convert(typeof(options.maxsize), 3), nout)
     end
 
     # Records the number of evaluations:
     # Real numbers indicate use of batching.
-    num_evals = [[0.0 for i in 1:(options.npopulations)] for j in 1:nout]
+    num_evals = [[0.0 for i in 1:(options.populations)] for j in 1:nout]
 
     we_created_procs = false
     ##########################################################################
@@ -543,28 +651,27 @@ function _EquationSearch(
 
         if we_created_procs
             project_path = splitdir(Pkg.project().path)[1]
-            activate_env_on_workers(procs, project_path, options)
-            import_module_on_workers(procs, @__FILE__, options)
+            activate_env_on_workers(procs, project_path, options, verbosity)
+            import_module_on_workers(procs, @__FILE__, options, verbosity)
         end
-        move_functions_to_workers(procs, options, example_dataset)
+        move_functions_to_workers(procs, options, example_dataset, verbosity)
         if runtests
-            test_module_on_workers(procs, options)
+            test_module_on_workers(procs, options, verbosity)
         end
 
         if runtests
-            test_entire_pipeline(procs, example_dataset, options)
+            test_entire_pipeline(procs, example_dataset, options, verbosity)
         end
     end
     # Get the next worker process to give a job:
     worker_assignment = Dict{Tuple{Int,Int},Int}()
 
     hallOfFame = load_saved_hall_of_fame(saved_state)
-    if hallOfFame === nothing
-        hallOfFame = [HallOfFame(options, T, L) for j in 1:nout]
+    hallOfFame = if hallOfFame === nothing
+        [HallOfFame(options, T, L) for j in 1:nout]
     else
         # Recompute losses for the hall of fame, in
         # case the dataset changed:
-        hallOfFame::Vector{HallOfFame{T,L}}
         for (hof, dataset) in zip(hallOfFame, datasets)
             for member in hof.members[hof.exists]
                 score, result_loss = score_func(dataset, member, options)
@@ -572,116 +679,113 @@ function _EquationSearch(
                 member.loss = result_loss
             end
         end
+        hallOfFame
     end
     @assert length(hallOfFame) == nout
     hallOfFame::Vector{HallOfFame{T,L}}
 
-    for j in 1:nout
-        for i in 1:(options.npopulations)
-            worker_idx = next_worker(worker_assignment, procs)
-            if parallelism == :multiprocessing
-                worker_assignment[(j, i)] = worker_idx
-            end
-
-            saved_pop = load_saved_population(saved_state; out=j, pop=i)
-
-            if saved_pop !== nothing && length(saved_pop.members) == options.npop
-                saved_pop::Population{T,L}
-                ## Update losses:
-                for member in saved_pop.members
-                    score, result_loss = score_func(datasets[j], member, options)
-                    member.score = score
-                    member.loss = result_loss
-                end
-                copy_pop = copy_population(saved_pop)
-                new_pop = @sr_spawner parallelism worker_idx (
-                    copy_pop, HallOfFame(options, T, L), RecordType(), 0.0
-                )
-            else
-                if saved_pop !== nothing
-                    @warn "Recreating population (output=$(j), population=$(i)), as the saved one doesn't have the correct number of members."
-                end
-                new_pop = @sr_spawner parallelism worker_idx (
-                    Population(
-                        datasets[j];
-                        npop=options.npop,
-                        nlength=3,
-                        options=options,
-                        nfeatures=datasets[j].nfeatures,
-                    ),
-                    HallOfFame(options, T, L),
-                    RecordType(),
-                    Float64(options.npop),
-                )
-                # This involves npop evaluations, on the full dataset:
-            end
-            push!(init_pops[j], new_pop)
+    for j in 1:nout, i in 1:(options.populations)
+        worker_idx = next_worker(worker_assignment, procs)
+        if parallelism == :multiprocessing
+            worker_assignment[(j, i)] = worker_idx
         end
+
+        saved_pop = load_saved_population(saved_state; out=j, pop=i)
+
+        if saved_pop !== nothing && length(saved_pop.members) == options.population_size
+            saved_pop::Population{T,L}
+            ## Update losses:
+            for member in saved_pop.members
+                score, result_loss = score_func(datasets[j], member, options)
+                member.score = score
+                member.loss = result_loss
+            end
+            copy_pop = copy_population(saved_pop)
+            new_pop = @sr_spawner parallelism worker_idx (
+                copy_pop, HallOfFame(options, T, L), RecordType(), 0.0
+            )
+        else
+            if saved_pop !== nothing
+                @warn "Recreating population (output=$(j), population=$(i)), as the saved one doesn't have the correct number of members."
+            end
+            new_pop = @sr_spawner parallelism worker_idx (
+                Population(
+                    datasets[j];
+                    population_size=options.population_size,
+                    nlength=3,
+                    options=options,
+                    nfeatures=datasets[j].nfeatures,
+                ),
+                HallOfFame(options, T, L),
+                RecordType(),
+                Float64(options.population_size),
+            )
+            # This involves population_size evaluations, on the full dataset:
+        end
+        push!(init_pops[j], new_pop)
     end
     # 2. Start the cycle on every process:
-    for j in 1:nout
+    for j in 1:nout, i in 1:(options.populations)
         dataset = datasets[j]
         running_search_statistics = all_running_search_statistics[j]
         curmaxsize = curmaxsizes[j]
-        for i in 1:(options.npopulations)
-            @recorder record["out$(j)_pop$(i)"] = RecordType()
-            worker_idx = next_worker(worker_assignment, procs)
-            if parallelism == :multiprocessing
-                worker_assignment[(j, i)] = worker_idx
-            end
-
-            # TODO - why is this needed??
-            # Multi-threaded doesn't like to fetch within a new task:
-            c_rss = deepcopy(running_search_statistics)
-            updated_pop = @sr_spawner parallelism worker_idx let
-                in_pop = if parallelism in (:multiprocessing, :multithreading)
-                    fetch(init_pops[j][i])[1]
-                else
-                    init_pops[j][i][1]
-                end
-
-                cur_record = RecordType()
-                @recorder cur_record["out$(j)_pop$(i)"] = RecordType(
-                    "iteration0" => record_population(in_pop, options)
-                )
-                tmp_num_evals = 0.0
-                normalize_frequencies!(c_rss)
-                tmp_pop, tmp_best_seen, evals_from_cycle = s_r_cycle(
-                    dataset,
-                    in_pop,
-                    options.ncycles_per_iteration,
-                    curmaxsize,
-                    c_rss;
-                    verbosity=options.verbosity,
-                    options=options,
-                    record=cur_record,
-                )
-                tmp_num_evals += evals_from_cycle
-                tmp_pop, evals_from_optimize = optimize_and_simplify_population(
-                    dataset, tmp_pop, options, curmaxsize, cur_record
-                )
-                tmp_num_evals += evals_from_optimize
-                if options.batching
-                    for i_member in 1:(options.maxsize + MAX_DEGREE)
-                        score, result_loss = score_func(
-                            dataset, tmp_best_seen.members[i_member], options
-                        )
-                        tmp_best_seen.members[i_member].score = score
-                        tmp_best_seen.members[i_member].loss = result_loss
-                        tmp_num_evals += 1
-                    end
-                end
-                (tmp_pop, tmp_best_seen, cur_record, tmp_num_evals)
-            end
-            push!(allPops[j], updated_pop)
+        @recorder record["out$(j)_pop$(i)"] = RecordType()
+        worker_idx = next_worker(worker_assignment, procs)
+        if parallelism == :multiprocessing
+            worker_assignment[(j, i)] = worker_idx
         end
+
+        # TODO - why is this needed??
+        # Multi-threaded doesn't like to fetch within a new task:
+        c_rss = deepcopy(running_search_statistics)
+        updated_pop = @sr_spawner parallelism worker_idx let
+            in_pop = if parallelism in (:multiprocessing, :multithreading)
+                fetch(init_pops[j][i])[1]
+            else
+                init_pops[j][i][1]
+            end
+
+            cur_record = RecordType()
+            @recorder cur_record["out$(j)_pop$(i)"] = RecordType(
+                "iteration0" => record_population(in_pop, options)
+            )
+            tmp_num_evals = 0.0
+            normalize_frequencies!(c_rss)
+            tmp_pop, tmp_best_seen, evals_from_cycle = s_r_cycle(
+                dataset,
+                in_pop,
+                options.ncycles_per_iteration,
+                curmaxsize,
+                c_rss;
+                verbosity=verbosity,
+                options=options,
+                record=cur_record,
+            )
+            tmp_num_evals += evals_from_cycle
+            tmp_pop, evals_from_optimize = optimize_and_simplify_population(
+                dataset, tmp_pop, options, curmaxsize, cur_record
+            )
+            tmp_num_evals += evals_from_optimize
+            if options.batching
+                for i_member in 1:(options.maxsize + MAX_DEGREE)
+                    score, result_loss = score_func(
+                        dataset, tmp_best_seen.members[i_member], options
+                    )
+                    tmp_best_seen.members[i_member].score = score
+                    tmp_best_seen.members[i_member].loss = result_loss
+                    tmp_num_evals += 1
+                end
+            end
+            (tmp_pop, tmp_best_seen, cur_record, tmp_num_evals)
+        end
+        push!(allPops[j], updated_pop)
     end
 
-    debug(options.verbosity > 0 || options.progress, "Started!")
+    debug(verbosity > 0, "Started!")
     start_time = time()
-    total_cycles = options.npopulations * niterations
+    total_cycles = options.populations * niterations
     cycles_remaining = [total_cycles for j in 1:nout]
-    if options.progress && nout == 1
+    if progress
         #TODO: need to iterate this on the max cycles remaining!
         sum_cycle_remaining = sum(cycles_remaining)
         progress_bar = WrappedProgressBar(
@@ -697,32 +801,30 @@ function _EquationSearch(
     equation_speed = Float32[]
 
     if parallelism in (:multiprocessing, :multithreading)
-        for j in 1:nout
-            for i in 1:(options.npopulations)
-                # Start listening for each population to finish:
-                t = @async put!(channels[j][i], fetch(allPops[j][i]))
-                push!(tasks[j], t)
-            end
+        for j in 1:nout, i in 1:(options.populations)
+            # Start listening for each population to finish:
+            t = @async put!(channels[j][i], fetch(allPops[j][i]))
+            push!(tasks[j], t)
         end
     end
 
     # Randomly order which order to check populations:
     # This is done so that we do work on all nout equally.
-    all_idx = [(j, i) for j in 1:nout for i in 1:(options.npopulations)]
+    all_idx = [(j, i) for j in 1:nout for i in 1:(options.populations)]
     shuffle!(all_idx)
     kappa = 0
     resource_monitor = ResourceMonitor(;
         absolute_start_time=time(),
         # Storing n times as many monitoring intervals as populations seems like it will
         # help get accurate resource estimates:
-        num_intervals_to_store=options.npopulations * 100 * nout,
+        num_intervals_to_store=options.populations * 100 * nout,
     )
     while sum(cycles_remaining) > 0
         kappa += 1
-        if kappa > options.npopulations * nout
+        if kappa > options.populations * nout
             kappa = 1
         end
-        # nout, npopulations:
+        # nout, populations:
         j, i = all_idx[kappa]
 
         # Check if error on population:
@@ -809,7 +911,7 @@ function _EquationSearch(
                             println(
                                 io,
                                 "$(compute_complexity(member, options)),$(member.loss),\"" *
-                                "$(string_tree(member.tree, options.operators, varMap=dataset.varMap))\"",
+                                "$(string_tree(member.tree, options, variable_names=dataset.variable_names))\"",
                             )
                         end
                     end
@@ -858,7 +960,7 @@ function _EquationSearch(
                     options.ncycles_per_iteration,
                     curmaxsize,
                     c_rss;
-                    verbosity=options.verbosity,
+                    verbosity=verbosity,
                     options=options,
                     record=cur_record,
                 )
@@ -904,7 +1006,7 @@ function _EquationSearch(
             end
             stop_work_monitor!(resource_monitor)
             move_window!(all_running_search_statistics[j])
-            if options.progress && nout == 1
+            if progress
                 head_node_occupation = estimate_work_fraction(resource_monitor)
                 update_progress_bar!(
                     progress_bar,
@@ -941,8 +1043,7 @@ function _EquationSearch(
         elapsed = time() - last_print_time
         # Update if time has passed
         if elapsed > print_every_n_seconds
-            if ((options.verbosity > 0) || (options.progress && nout > 1)) &&
-                length(equation_speed) > 0
+            if verbosity > 0 && !progress && length(equation_speed) > 0
 
                 # Dominating pareto curve - must be better than all simpler equations
                 head_node_occupation = estimate_work_fraction(resource_monitor)
@@ -981,7 +1082,7 @@ function _EquationSearch(
     if parallelism == :multiprocessing
         we_created_procs && rmprocs(procs)
     elseif parallelism == :multithreading
-        for j in 1:nout, i in 1:(options.npopulations)
+        for j in 1:nout, i in 1:(options.populations)
             wait(allPops[j][i])
         end
     end
@@ -990,36 +1091,31 @@ function _EquationSearch(
     ### Distributed code^
     ##########################################################################
 
-    @recorder begin
-        open(options.recorder_file, "w") do io
-            JSON3.write(io, record; allow_inf=true)
-        end
-    end
+    @recorder json3_write(record, options.recorder_file)
 
-    if options.return_state
-        state = (returnPops, (nout == 1 ? only(hallOfFame) : hallOfFame))
-        state::StateType{T,L}
-        return state
+    if should_return_state
+        return (returnPops, (dim_out == 1 ? only(hallOfFame) : hallOfFame))
     else
-        if nout == 1
-            return only(hallOfFame)
-        else
-            return hallOfFame
-        end
+        return (dim_out == 1 ? only(hallOfFame) : hallOfFame)
     end
 end
 
-#! format: off
-if !isdefined(Base, :get_extension)
-    @init @require SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b" include("../ext/SymbolicRegressionSymbolicUtilsExt.jl")
+include("MLJInterface.jl")
+import .MLJInterfaceModule: SRRegressor, MultitargetSRRegressor
+
+function __init__()
+    @require_extensions
 end
-#! format: on
 
 macro ignore(args...) end
 # Hack to get static analysis to work from within tests:
 @ignore include("../test/runtests.jl")
 
 include("precompile.jl")
-do_precompilation(; mode=:precompile)
+redirect_stdout(devnull) do
+    redirect_stderr(devnull) do
+        do_precompilation(Val(:precompile))
+    end
+end
 
 end #module SR

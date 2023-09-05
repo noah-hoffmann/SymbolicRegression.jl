@@ -67,7 +67,7 @@ for i in 0:5
             default_params...,
             binary_operators=(+, *),
             unary_operators=(cos,),
-            npopulations=4,
+            populations=4,
             batching=batching,
             crossover_probability=crossover_probability,
             skip_mutation_failures=skip_mutation_failures,
@@ -90,7 +90,7 @@ for i in 0:5
         # Completely different function superimposed - need
         # to use correct weights to figure it out!
         y = (2 .* cos.(X[4, :])) .* weights .+ (1 .- weights) .* (5 .* X[2, :])
-        hallOfFame = EquationSearch(
+        hallOfFame = equation_search(
             X,
             y;
             weights=weights,
@@ -109,7 +109,7 @@ for i in 0:5
             y = transpose(y)
             niterations = 20
         end
-        hallOfFame = EquationSearch(
+        hallOfFame = equation_search(
             X,
             y;
             niterations=niterations,

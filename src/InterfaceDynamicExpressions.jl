@@ -1,6 +1,10 @@
 module InterfaceDynamicExpressionsModule
 
+import Printf: @sprintf
+using DynamicExpressions: DynamicExpressions
 import DynamicExpressions:
+    OperatorEnum,
+    GenericOperatorEnum,
     Node,
     eval_tree_array,
     eval_diff_tree_array,
@@ -8,8 +12,13 @@ import DynamicExpressions:
     print_tree,
     string_tree,
     differentiable_eval_tree_array
-using DynamicExpressions: DynamicExpressions
+import DynamicQuantities: dimension, ustrip
 import ..CoreModule: Options
+import ..CoreModule.OptionsModule: inverse_binopmap, inverse_unaopmap
+import ..UtilsModule: subscriptify
+#! format: off
+import ..deprecate_varmap
+#! format: on
 
 """
     eval_tree_array(tree::Node, X::AbstractArray, options::Options; kws...)
@@ -123,11 +132,95 @@ Convert an equation to a string.
 
 - `tree::Node`: The equation to convert to a string.
 - `options::Options`: The options holding the definition of operators.
-- `varMap::Union{Array{String, 1}, Nothing}=nothing`: what variables
+- `variable_names::Union{Array{String, 1}, Nothing}=nothing`: what variables
     to print for each feature.
 """
-function string_tree(tree::Node, options::Options; kws...)
-    return string_tree(tree, options.operators; kws...)
+@inline function string_tree(
+    tree::Node,
+    options::Options;
+    raw::Bool=true,
+    X_sym_units=nothing,
+    y_sym_units=nothing,
+    variable_names=nothing,
+    display_variable_names=variable_names,
+    varMap=nothing,
+    kws...,
+)
+    variable_names = deprecate_varmap(variable_names, varMap, :string_tree)
+
+    raw && return string_tree(
+        tree, options.operators; f_variable=string_variable_raw, variable_names
+    )
+
+    vprecision = vals[options.print_precision]
+    if X_sym_units !== nothing || y_sym_units !== nothing
+        return string_tree(
+            tree,
+            options.operators;
+            f_variable=(feature, vname) -> string_variable(feature, vname, X_sym_units),
+            f_constant=(val, bracketed) ->
+                string_constant(val, bracketed, vprecision, "[⋅]"),
+            variable_names=display_variable_names,
+            kws...,
+        )
+    else
+        return string_tree(
+            tree,
+            options.operators;
+            f_variable=string_variable,
+            f_constant=(val, bracketed) -> string_constant(val, bracketed, vprecision, ""),
+            variable_names=display_variable_names,
+            kws...,
+        )
+    end
+end
+const vals = ntuple(Val, 8192)
+function string_variable_raw(feature, variable_names)
+    if variable_names === nothing || feature > length(variable_names)
+        return "x" * string(feature)
+    else
+        return variable_names[feature]
+    end
+end
+function string_variable(feature, variable_names, variable_units=nothing)
+    base = if variable_names === nothing || feature > length(variable_names)
+        "x" * subscriptify(feature)
+    else
+        variable_names[feature]
+    end
+    if variable_units !== nothing
+        base *= format_dimensions(variable_units[feature])
+    end
+    return base
+end
+function string_constant(
+    val, bracketed, ::Val{precision}, unit_placeholder
+) where {precision}
+    does_not_need_brackets = typeof(val) <: Real
+    if does_not_need_brackets
+        return sprint_precision(val, Val(precision)) * unit_placeholder
+    else
+        return "(" * string(val) * ")" * unit_placeholder
+    end
+end
+function format_dimensions(::Nothing)
+    return ""
+end
+function format_dimensions(u)
+    if isone(ustrip(u))
+        dim = dimension(u)
+        if iszero(dim)
+            return ""
+        else
+            return "[" * string(dim) * "]"
+        end
+    else
+        return "[" * string(u) * "]"
+    end
+end
+@generated function sprint_precision(x, ::Val{precision}) where {precision}
+    fmt_string = "%.$(precision)g"
+    return :(@sprintf($fmt_string, x))
 end
 
 """
@@ -139,7 +232,7 @@ Print an equation
 
 - `tree::Node`: The equation to convert to a string.
 - `options::Options`: The options holding the definition of operators.
-- `varMap::Union{Array{String, 1}, Nothing}=nothing`: what variables
+- `variable_names::Union{Array{String, 1}, Nothing}=nothing`: what variables
     to print for each feature.
 """
 function print_tree(tree::Node, options::Options; kws...)
@@ -169,14 +262,27 @@ apply this macro to the operator enum in the same module you have the operators
 defined.
 """
 macro extend_operators(options)
-    operators = :($(esc(options)).operators)
+    operators = :($(options).operators)
     type_requirements = Options
-    quote
-        if !isa($(esc(options)), $type_requirements)
+    @gensym alias_operators
+    return quote
+        if !isa($(options), $type_requirements)
             error("You must pass an options type to `@extend_operators`.")
         end
-        DynamicExpressions.@extend_operators $operators
-    end
+        $alias_operators = $define_alias_operators($operators)
+        $(DynamicExpressions).@extend_operators $alias_operators
+    end |> esc
+end
+function define_alias_operators(operators)
+    # We undo some of the aliases so that the user doesn't need to use, e.g.,
+    # `safe_pow(x1, 1.5)`. They can use `x1 ^ 1.5` instead.
+    constructor = isa(operators, OperatorEnum) ? OperatorEnum : GenericOperatorEnum
+    return constructor(;
+        binary_operators=inverse_binopmap.(operators.binops),
+        unary_operators=inverse_unaopmap.(operators.unaops),
+        define_helper_functions=false,
+        empty_old_operators=false,
+    )
 end
 
 function (tree::Node)(X, options::Options; kws...)

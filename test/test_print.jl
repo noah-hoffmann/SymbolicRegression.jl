@@ -1,5 +1,6 @@
 using Test
 using SymbolicRegression
+using SymbolicRegression.UtilsModule: split_string
 
 include("test_params.jl")
 
@@ -17,11 +18,11 @@ true_s = "((sin(cos(sin(cos(x1) * x3) * 3.0) * -0.5) + 2.0) * 5.0)"
 
 @test s == true_s
 
-EquationSearch(
+equation_search(
     randn(Float32, 3, 10),
     randn(Float32, 10);
     options=options,
-    varMap=["v1", "v2", "v3"],
+    variable_names=["v1", "v2", "v3"],
     niterations=0,
     parallelism=:multithreading,
 )
@@ -44,4 +45,13 @@ for binop in [safe_pow, ^]
     )
     minitree = Node(5, Node("x1"), Node("x2"))
     @test string_tree(minitree, opts) == "(x1 ^ x2)"
+end
+
+@testset "Test splitting of strings" begin
+    split_string("abcdefgh", 3) == ["abc", "def", "gh"]
+    split_string("abcdefgh", 100) == ["abcdefgh"]
+    split_string("⋅", 1) == ["⋅"]
+    split_string("⋅⋅", 1) == ["⋅", "⋅"]
+    split_string("⋅⋅⋅⋅", 2) == ["⋅⋅", "⋅⋅"]
+    split_string("ραβγ", 2) == ["ρα", "βγ"]
 end
