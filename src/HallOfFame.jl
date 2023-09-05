@@ -1,14 +1,16 @@
 module HallOfFameModule
 
 import DynamicExpressions: Node, string_tree
-import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
+import ..UtilsModule: split_string
+import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE, relu
 import ..ComplexityModule: compute_complexity
 import ..PopMemberModule: PopMember, copy_pop_member
 import ..LossFunctionsModule: eval_loss
+import ..InterfaceDynamicExpressionsModule: format_dimensions
 using Printf: @sprintf
 
 """
-HallOfFame{T<:DATA_TYPE,L<:LOSS_TYPE}
+    HallOfFame{T<:DATA_TYPE,L<:LOSS_TYPE}
 
 List of the best members seen all time in `.members`, with `.members[c]` being
 the best member seen at complexity c. Including only the members which actually
@@ -107,9 +109,6 @@ function string_dominating_pareto_curve(
 )
     twidth = (width === nothing) ? 100 : max(100, width::Integer)
     output = ""
-    curMSE = Float64(dataset.baseline_loss)
-    lastMSE = curMSE
-    lastComplexity = 0
     output *= "Hall of Fame:\n"
     # TODO: Get user's terminal width.
     output *= "-"^(twidth - 1) * "\n"
@@ -117,30 +116,30 @@ function string_dominating_pareto_curve(
         "%-10s  %-8s   %-8s  %-8s\n", "Complexity", "Loss", "Score", "Equation"
     )
 
-    dominating = calculate_pareto_frontier(hallOfFame)
-    for member in dominating
-        complexity = compute_complexity(member, options)
-        if member.loss < 0.0
-            throw(
-                DomainError(
-                    member.loss,
-                    "Your loss function must be non-negative. To do this, consider wrapping your loss inside an exponential, which will not affect the search (unless you are using annealing).",
-                ),
-            )
+    formatted = format_hall_of_fame(hallOfFame, options)
+    for (tree, score, loss, complexity) in
+        zip(formatted.trees, formatted.scores, formatted.losses, formatted.complexities)
+        eqn_string = string_tree(
+            tree,
+            options;
+            display_variable_names=dataset.display_variable_names,
+            X_sym_units=dataset.X_sym_units,
+            y_sym_units=dataset.y_sym_units,
+            raw=false,
+        )
+        y_prefix = dataset.y_variable_name
+        unit_str = format_dimensions(dataset.y_sym_units)
+        y_prefix *= unit_str
+        if dataset.y_sym_units === nothing && dataset.X_sym_units !== nothing
+            y_prefix *= "[⋅]"
         end
-        curMSE = member.loss
-
-        delta_c = complexity - lastComplexity
-        ZERO_POINT = 1e-10
-        delta_l_mse = log(abs(curMSE / lastMSE) + ZERO_POINT)
-        score = convert(Float32, -delta_l_mse / delta_c)
-        eqn_string = string_tree(member.tree, options.operators; varMap=dataset.varMap)
+        eqn_string = y_prefix * " = " * eqn_string
         base_string_length = length(@sprintf("%-10d  %-8.3e  %8.3e  ", 1, 1.0, 1.0))
 
         dots = "..."
         equation_width = (twidth - 1) - base_string_length - length(dots)
 
-        output *= @sprintf("%-10d  %-8.3e  %-8.3e  ", complexity, curMSE, score,)
+        output *= @sprintf("%-10d  %-8.3e  %-8.3e  ", complexity, loss, score)
 
         split_eqn = split_string(eqn_string, equation_width)
         print_pad = false
@@ -150,28 +149,59 @@ function string_dominating_pareto_curve(
             print_pad = true
         end
         output *= " "^(print_pad * base_string_length) * split_eqn[1] * "\n"
-
-        lastMSE = curMSE
-        lastComplexity = complexity
     end
     output *= "-"^(twidth - 1)
     return output
 end
 
-"""
-    split_string(s::String, n::Integer)
+function format_hall_of_fame(
+    hof::HallOfFame{T,L}, options
+) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+    dominating = calculate_pareto_frontier(hof)
+    foreach(dominating) do member
+        if member.loss < 0.0
+            throw(
+                DomainError(
+                    member.loss,
+                    "Your loss function must be non-negative. To do this, consider wrapping your loss inside an exponential, which will not affect the search (unless you are using annealing).",
+                ),
+            )
+        end
+    end
 
-```jldoctest
-split_string("abcdefgh", 3)
+    ZERO_POINT = eps(L)
+    cur_loss = typemax(L)
+    last_loss = cur_loss
+    last_complexity = 0
 
-# output
+    trees = [member.tree for member in dominating]
+    losses = [member.loss for member in dominating]
+    complexities = [compute_complexity(member, options) for member in dominating]
+    scores = Array{L}(undef, length(dominating))
 
-["abc", "def", "gh"]
-```
-"""
-function split_string(s::String, n::Integer)
-    length(s) <= n && return [s]
-    return [s[i:min(i + n - 1, end)] for i in 1:n:length(s)]
+    for i in 1:length(dominating)
+        complexity = complexities[i]
+        cur_loss = losses[i]
+        delta_c = complexity - last_complexity
+        delta_l_mse = log(relu(cur_loss / last_loss) + ZERO_POINT)
+
+        scores[i] = relu(-delta_l_mse / delta_c)
+        last_loss = cur_loss
+        last_complexity = complexity
+    end
+    return (; trees, scores, losses, complexities)
 end
+function format_hall_of_fame(
+    hof::AH, options
+) where {T,L,H<:HallOfFame{T,L},AH<:AbstractVector{H}}
+    outs = [format_hall_of_fame(h, options) for h in hof]
+    return (;
+        trees=[out.trees for out in outs],
+        scores=[out.scores for out in outs],
+        losses=[out.losses for out in outs],
+        complexities=[out.complexities for out in outs],
+    )
+end
+# TODO: Re-use this in `string_dominating_pareto_curve`
 
 end

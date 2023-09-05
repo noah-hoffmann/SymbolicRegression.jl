@@ -1,27 +1,45 @@
 const TEST_TYPE = Float32
 
-function assert_operators_defined_over_reals(T, options::Options)
-    test_input = map(x -> convert(T, x), LinRange(-100, 100, 99))
-    cur_op = nothing
+function test_operator(op::F, x::T, y=nothing) where {F,T}
+    local output
     try
-        for left in test_input
-            for right in test_input
-                for binop in options.operators.binops
-                    cur_op = binop
-                    test_output = binop.(left, right)
-                end
-            end
-            for unaop in options.operators.unaops
-                cur_op = unaop
-                test_output = unaop.(left)
-            end
-        end
-    catch error
-        throw(
-            AssertionError(
-                "Your configuration is invalid - one of your operators ($cur_op) is not well-defined over the real line. You can get around this by returning `NaN` for invalid inputs.",
-            ),
+        output = y === nothing ? op(x) : op(x, y)
+    catch e
+        error(
+            "The operator `$(op)` is not well-defined over the " *
+            ((T <: Complex) ? "complex plane, " : "real line, ") *
+            "as it threw the error `$(typeof(e))` when evaluating the " *
+            (y === nothing ? "input $(x). " : "inputs $(x) and $(y). ") *
+            "You can work around this by returning " *
+            "NaN for invalid inputs. For example, " *
+            "`safe_log(x::T) where {T} = x > 0 ? log(x) : T(NaN)`.",
         )
+    end
+    if !isa(output, T)
+        error(
+            "The operator `$(op)` returned an output of type `$(typeof(output))`, " *
+            "when it was given " *
+            (y === nothing ? "an input $(x) " : "inputs $(x) and $(y) ") *
+            "of type `$(T)`. " *
+            "Please ensure that your operators return the same type as their inputs.",
+        )
+    end
+    return nothing
+end
+
+const TEST_INPUTS = collect(range(-100, 100; length=99))
+
+function assert_operators_well_defined(T, options::Options)
+    test_input = if T <: Complex
+        (x -> convert(T, x)).(TEST_INPUTS .+ TEST_INPUTS .* im)
+    else
+        (x -> convert(T, x)).(TEST_INPUTS)
+    end
+    for x in test_input, y in test_input, op in options.operators.binops
+        test_operator(op, x, y)
+    end
+    for x in test_input, op in options.operators.unaops
+        test_operator(op, x)
     end
 end
 
@@ -37,7 +55,7 @@ function test_option_configuration(T, options::Options)
         end
     end
 
-    assert_operators_defined_over_reals(T, options)
+    assert_operators_well_defined(T, options)
 
     operator_intersection = intersect(options.operators.binops, options.operators.unaops)
     if length(operator_intersection) > 0
@@ -51,7 +69,7 @@ end
 
 # Check for errors before they happen
 function test_dataset_configuration(
-    dataset::Dataset{T}, options::Options
+    dataset::Dataset{T}, options::Options, verbosity
 ) where {T<:DATA_TYPE}
     n = dataset.n
     if n != size(dataset.X, 2) ||
@@ -66,7 +84,7 @@ function test_dataset_configuration(
     if size(dataset.X, 2) > 10000
         if !options.batching
             debug(
-                (options.verbosity > 0 || options.progress),
+                verbosity > 0,
                 "Note: you are running with more than 10,000 datapoints. You should consider turning on batching (`options.batching`), and also if you need that many datapoints. Unless you have a large amount of noise (in which case you should smooth your dataset first), generally < 10,000 datapoints is enough to find a functional form.",
             )
         end
@@ -86,7 +104,7 @@ function test_dataset_configuration(
 end
 
 """ Move custom operators and loss functions to workers, if undefined """
-function move_functions_to_workers(procs, options::Options, dataset::AbstractDataset{T}) where {T}
+function move_functions_to_workers(procs, options::Options, dataset::AbstractDataset{T}, verbosity) where {T}
     enable_autodiff =
         :diff_binops in fieldnames(typeof(options.operators)) &&
         :diff_unaops in fieldnames(typeof(options.operators)) &&
@@ -156,7 +174,7 @@ function move_functions_to_workers(procs, options::Options, dataset::AbstractDat
             catch e
                 undefined_on_workers = isa(e.captured.ex, UndefVarError)
                 if undefined_on_workers
-                    copy_definition_to_workers(op, procs, options)
+                    copy_definition_to_workers(op, procs, options, verbosity)
                 else
                     throw(e)
                 end
@@ -166,19 +184,16 @@ function move_functions_to_workers(procs, options::Options, dataset::AbstractDat
     end
 end
 
-function copy_definition_to_workers(op, procs, options::Options)
+function copy_definition_to_workers(op, procs, options::Options, verbosity)
     name = nameof(op)
-    debug_inline(
-        (options.verbosity > 0 || options.progress),
-        "Copying definition of $op to workers...",
-    )
+    debug_inline(verbosity > 0, "Copying definition of $op to workers...")
     src_ms = methods(op).ms
     # Thanks https://discourse.julialang.org/t/easy-way-to-send-custom-function-to-distributed-workers/22118/2
     @everywhere procs @eval function $name end
     for m in src_ms
         @everywhere procs @eval $m
     end
-    return debug((options.verbosity > 0 || options.progress), "Finished!")
+    return debug(verbosity > 0, "Finished!")
 end
 
 function test_function_on_workers(example_inputs, op, procs)
@@ -191,8 +206,8 @@ function test_function_on_workers(example_inputs, op, procs)
     end
 end
 
-function activate_env_on_workers(procs, project_path::String, options::Options)
-    debug((options.verbosity > 0 || options.progress), "Activating environment on workers.")
+function activate_env_on_workers(procs, project_path::String, options::Options, verbosity)
+    debug(verbosity > 0, "Activating environment on workers.")
     @everywhere procs begin
         Base.MainInclude.eval(
             quote
@@ -203,13 +218,10 @@ function activate_env_on_workers(procs, project_path::String, options::Options)
     end
 end
 
-function import_module_on_workers(procs, filename::String, options::Options)
+function import_module_on_workers(procs, filename::String, options::Options, verbosity)
     included_local = !("SymbolicRegression" in [k.name for (k, v) in Base.loaded_modules])
     if included_local
-        debug_inline(
-            (options.verbosity > 0 || options.progress),
-            "Importing local module ($filename) on workers...",
-        )
+        debug_inline(verbosity > 0, "Importing local module ($filename) on workers...")
         @everywhere procs begin
             # Parse functions on every worker node
             Base.MainInclude.eval(
@@ -219,23 +231,18 @@ function import_module_on_workers(procs, filename::String, options::Options)
                 end,
             )
         end
-        debug((options.verbosity > 0 || options.progress), "Finished!")
+        debug(verbosity > 0, "Finished!")
     else
-        debug_inline(
-            (options.verbosity > 0 || options.progress),
-            "Importing installed module on workers...",
-        )
+        debug_inline(verbosity > 0, "Importing installed module on workers...")
         @everywhere procs begin
             Base.MainInclude.eval(using SymbolicRegression)
         end
-        debug((options.verbosity > 0 || options.progress), "Finished!")
+        debug(verbosity > 0, "Finished!")
     end
 end
 
-function test_module_on_workers(procs, options::Options)
-    debug_inline(
-        (options.verbosity > 0 || options.progress), "Testing module on workers..."
-    )
+function test_module_on_workers(procs, options::Options, verbosity)
+    debug_inline(verbosity > 0, "Testing module on workers...")
     futures = []
     for proc in procs
         push!(
@@ -246,23 +253,21 @@ function test_module_on_workers(procs, options::Options)
     for future in futures
         fetch(future)
     end
-    return debug((options.verbosity > 0 || options.progress), "Finished!")
+    return debug(verbosity > 0, "Finished!")
 end
 
 function test_entire_pipeline(
-    procs, dataset::AbstractDataset{T}, options::Options
+    procs, dataset::AbstractDataset{T}, options::Options, verbosity
 ) where {T<:DATA_TYPE}
     futures = []
-    debug_inline(
-        (options.verbosity > 0 || options.progress), "Testing entire pipeline on workers..."
-    )
+    debug_inline(verbosity > 0, "Testing entire pipeline on workers...")
     for proc in procs
         push!(
             futures,
             @spawnat proc begin
                 tmp_pop = Population(
                     dataset;
-                    npop=20,
+                    population_size=20,
                     nlength=3,
                     options=options,
                     nfeatures=dataset.nfeatures,
@@ -273,7 +278,7 @@ function test_entire_pipeline(
                     5,
                     5,
                     RunningSearchStatistics(; options=options);
-                    verbosity=options.verbosity,
+                    verbosity=verbosity,
                     options=options,
                     record=RecordType(),
                 )[1]
@@ -286,5 +291,5 @@ function test_entire_pipeline(
     for future in futures
         fetch(future)
     end
-    return debug((options.verbosity > 0 || options.progress), "Finished!")
+    return debug(verbosity > 0, "Finished!")
 end

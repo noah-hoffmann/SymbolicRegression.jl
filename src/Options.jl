@@ -5,7 +5,7 @@ using Dates: Dates
 using StatsBase: StatsBase
 import DynamicExpressions: OperatorEnum, Node, string_tree
 import Distributed: nworkers
-import LossFunctions: L2DistLoss
+import LossFunctions: L2DistLoss, SupervisedLoss
 #TODO - eventually move some of these
 # into the SR call itself, rather than
 # passing huge options at once.
@@ -24,7 +24,7 @@ import ..OperatorsModule:
     safe_acosh,
     atanh_clip
 import ..OptionsStructModule: Options, ComplexityMapping, MutationWeights, mutations
-import ..UtilsModule: max_ops
+import ..UtilsModule: max_ops, @save_kwargs
 
 """
          build_constraints(una_constraints, bin_constraints,
@@ -101,6 +101,12 @@ function binopmap(op)
     end
     return op
 end
+function inverse_binopmap(op)
+    if op == safe_pow
+        return ^
+    end
+    return op
+end
 
 function unaopmap(op)
     if op == log
@@ -117,6 +123,24 @@ function unaopmap(op)
         return safe_acosh
     elseif op == atanh
         return atanh_clip
+    end
+    return op
+end
+function inverse_unaopmap(op)
+    if op == safe_log
+        return log
+    elseif op == safe_log10
+        return log10
+    elseif op == safe_log2
+        return log2
+    elseif op == safe_log1p
+        return log1p
+    elseif op == safe_sqrt
+        return sqrt
+    elseif op == safe_acosh
+        return acosh
+    elseif op == atanh_clip
+        return atanh
     end
     return op
 end
@@ -139,20 +163,13 @@ const deprecated_options_mapping = NamedTuple([
     :optimize_probability => :optimizer_probability,
     :probPickFirst => :tournament_selection_p,
     :earlyStopCondition => :early_stop_condition,
-    :stateReturn => :return_state,
+    :stateReturn => :deprecated_return_state,
+    :return_state => :deprecated_return_state,
     :ns => :tournament_selection_n,
     :loss => :elementwise_loss,
 ])
 
-"""
-    Options(;kws...)
-
-Construct options for `EquationSearch` and other functions.
-The current arguments have been tuned using the median values from
-https://github.com/MilesCranmer/PySR/discussions/115.
-
-# Arguments
-- `binary_operators`: Vector of binary operators (functions) to use.
+const OPTION_DESCRIPTIONS = """- `binary_operators`: Vector of binary operators (functions) to use.
     Each operator should be defined for two input scalars,
     and one output scalar. All operators
     need to be defined over the entire real line (excluding infinity - these
@@ -208,11 +225,23 @@ https://github.com/MilesCranmer/PySR/discussions/115.
     scalar of type `T`. This is useful if you want to use a loss
     that takes into account derivatives, or correlations across
     the dataset. This also means you could use a custom evaluation
-    for a particular expression. Take a look at `_eval_loss` in
-    the file `src/LossFunctions.jl` for an example.
-- `npopulations`: How many populations of equations to use. By default
-    this is set equal to the number of cores
-- `npop`: How many equations in each population.
+    for a particular expression. If you are using
+    `batching=true`, then your function should
+    accept a fourth argument `idx`, which is either `nothing`
+    (indicating that the full dataset should be used), or a vector
+    of indices to use for the batch.
+    For example,
+
+        function my_loss(tree, dataset::Dataset{T,L}, options)::L where {T,L}
+            prediction, flag = eval_tree_array(tree, dataset.X, options)
+            if !flag
+                return L(Inf)
+            end
+            return sum((prediction .- dataset.y) .^ 2) / dataset.n
+        end
+
+- `populations`: How many populations of equations to use.
+- `population_size`: How many equations in each population.
 - `ncycles_per_iteration`: How many generations to consider per iteration.
 - `tournament_selection_n`: Number of expressions considered in each tournament.
 - `tournament_selection_p`: The fittest expression in a tournament is to be
@@ -237,6 +266,8 @@ https://github.com/MilesCranmer/PySR/discussions/115.
     this is set equal to the maxsize.
 - `parsimony`: A multiplicative factor for how much complexity is
     punished.
+- `dimensional_constraint_penalty`: An additive factor if the dimensional
+    constraint is violated.
 - `use_frequency`: Whether to use a parsimony that adapts to the
     relative proportion of equations at each complexity; this will
     ensure that there are a balanced number of equations considered
@@ -246,9 +277,6 @@ https://github.com/MilesCranmer/PySR/discussions/115.
 - `adaptive_parsimony_scaling`: How much to scale the adaptive parsimony term
     in the loss. Increase this if the search is spending too much time
     optimizing the most complex equations.
-- `fast_cycle`: Whether to thread over subsamples of equations during
-    regularized evolution. Slightly improves performance, but is a different
-    algorithm.
 - `turbo`: Whether to use `LoopVectorization.@turbo` to evaluate expressions.
     This can be significantly faster, but is only compatible with certain
     operators. *Experimental!*
@@ -286,6 +314,8 @@ https://github.com/MilesCranmer/PySR/discussions/115.
     at which the maxsize should be reached.
 - `verbosity`: Whether to print debugging statements or
     not.
+- `print_precision`: How many digits to print when printing
+    equations. By default, this is 5.
 - `save_to_file`: Whether to save equations to a file during the search.
 - `bin_constraints`: See `constraints`. This is the same, but specified for binary
     operators only (for example, if you have an operator that is both a binary
@@ -316,63 +346,75 @@ https://github.com/MilesCranmer/PySR/discussions/115.
 - `define_helper_functions`: Whether to define helper functions
     for constructing and evaluating trees.
 """
-function Options(;
+
+"""
+    Options(;kws...)
+
+Construct options for `equation_search` and other functions.
+The current arguments have been tuned using the median values from
+https://github.com/MilesCranmer/PySR/discussions/115.
+
+# Arguments
+$(OPTION_DESCRIPTIONS)
+"""
+function Options end
+@save_kwargs DEFAULT_OPTIONS function Options(;
     binary_operators=[+, -, /, *],
     unary_operators=[],
     constraints=nothing,
-    elementwise_loss=nothing,
-    loss_function=nothing,
-    tournament_selection_n=12, #1 sampled from every tournament_selection_n per mutation
-    tournament_selection_p=0.86f0,
-    topn=12, #samples to return per population
+    elementwise_loss::Union{Function,SupervisedLoss,Nothing}=nothing,
+    loss_function::Union{Function,Nothing}=nothing,
+    tournament_selection_n::Integer=12, #1 sampled from every tournament_selection_n per mutation
+    tournament_selection_p::Real=0.86,
+    topn::Integer=12, #samples to return per population
     complexity_of_operators=nothing,
     complexity_of_constants::Union{Nothing,Real}=nothing,
     complexity_of_variables::Union{Nothing,Real}=nothing,
-    parsimony=0.0032f0,
-    alpha=0.100000f0,
-    maxsize=20,
-    maxdepth=nothing,
-    fast_cycle=false,
-    turbo=false,
-    migration=true,
-    hof_migration=true,
-    should_simplify=nothing,
-    should_optimize_constants=true,
-    output_file=nothing,
-    npopulations=15,
-    perturbation_factor=0.076f0,
-    annealing=false,
-    batching=false,
-    batch_size=50,
+    parsimony::Real=0.0032,
+    dimensional_constraint_penalty::Union{Nothing,Real}=nothing,
+    alpha::Real=0.100000,
+    maxsize::Integer=20,
+    maxdepth::Union{Nothing,Integer}=nothing,
+    turbo::Bool=false,
+    migration::Bool=true,
+    hof_migration::Bool=true,
+    should_simplify::Union{Nothing,Bool}=nothing,
+    should_optimize_constants::Bool=true,
+    output_file::Union{Nothing,AbstractString}=nothing,
+    populations::Integer=15,
+    perturbation_factor::Real=0.076,
+    annealing::Bool=false,
+    batching::Bool=false,
+    batch_size::Integer=50,
     mutation_weights::Union{MutationWeights,AbstractVector,NamedTuple}=MutationWeights(),
-    crossover_probability=0.066f0,
-    warmup_maxsize_by=0.0f0,
-    use_frequency=true,
-    use_frequency_in_tournament=true,
-    adaptive_parsimony_scaling=20.0,
-    npop=33,
-    ncycles_per_iteration=550,
-    fraction_replaced=0.00036f0,
-    fraction_replaced_hof=0.035f0,
-    verbosity=convert(Int, 1e9),
-    save_to_file=true,
-    probability_negate_constant=0.01f0,
+    crossover_probability::Real=0.066,
+    warmup_maxsize_by::Real=0.0,
+    use_frequency::Bool=true,
+    use_frequency_in_tournament::Bool=true,
+    adaptive_parsimony_scaling::Real=20.0,
+    population_size::Integer=33,
+    ncycles_per_iteration::Integer=550,
+    fraction_replaced::Real=0.00036,
+    fraction_replaced_hof::Real=0.035,
+    verbosity::Union{Integer,Nothing}=nothing,
+    print_precision::Integer=5,
+    save_to_file::Bool=true,
+    probability_negate_constant::Real=0.01,
     seed=nothing,
     bin_constraints=nothing,
     una_constraints=nothing,
-    progress=true,
-    terminal_width=nothing,
-    optimizer_algorithm="BFGS",
-    optimizer_nrestarts=2,
-    optimizer_probability=0.14f0,
-    optimizer_iterations=nothing,
+    progress::Union{Bool,Nothing}=nothing,
+    terminal_width::Union{Nothing,Integer}=nothing,
+    optimizer_algorithm::AbstractString="BFGS",
+    optimizer_nrestarts::Integer=2,
+    optimizer_probability::Real=0.14,
+    optimizer_iterations::Union{Nothing,Integer}=nothing,
     optimizer_options::Union{Dict,NamedTuple,Optim.Options,Nothing}=nothing,
-    recorder=nothing,
-    recorder_file="pysr_recorder.json",
+    val_recorder::Val{use_recorder}=Val(false),
+    recorder_file::AbstractString="pysr_recorder.json",
     early_stop_condition::Union{Function,Real,Nothing}=nothing,
-    return_state::Bool=false,
-    timeout_in_seconds=nothing,
-    max_evals=nothing,
+    timeout_in_seconds::Union{Nothing,Real}=nothing,
+    max_evals::Union{Nothing,Integer}=nothing,
     skip_mutation_failures::Bool=true,
     enable_autodiff::Bool=false,
     nested_constraints=nothing,
@@ -382,16 +424,25 @@ function Options(;
     max_length::Int=3,
     predefined_nodes::Vector{Node}=Node[],
     # Not search options; just construction options:
-    define_helper_functions=true,
+    define_helper_functions::Bool=true,
+    deprecated_return_state=nothing,
     # Deprecated args:
+    fast_cycle::Bool=false,
+    npopulations::Union{Nothing,Integer}=nothing,
+    npop::Union{Nothing,Integer}=nothing,
     kws...,
-)
+) where {use_recorder}
     for k in keys(kws)
         !haskey(deprecated_options_mapping, k) && error("Unknown keyword argument: $k")
         new_key = deprecated_options_mapping[k]
-        Base.depwarn(
-            "The keyword argument `$(k)` is deprecated. Use `$(new_key)` instead.", :Options
-        )
+        if startswith(string(new_key), "deprecated_")
+            Base.depwarn("The keyword argument `$(k)` is deprecated.", :Options)
+        else
+            Base.depwarn(
+                "The keyword argument `$(k)` is deprecated. Use `$(new_key)` instead.",
+                :Options,
+            )
+        end
         # Now, set the new key to the old value:
         #! format: off
         k == :hofMigration && (hof_migration = kws[k]; true) && continue
@@ -410,7 +461,8 @@ function Options(;
         k == :optimize_probability && (optimizer_probability = kws[k]; true) && continue
         k == :probPickFirst && (tournament_selection_p = kws[k]; true) && continue
         k == :earlyStopCondition && (early_stop_condition = kws[k]; true) && continue
-        k == :stateReturn && (return_state = kws[k]; true) && continue
+        k == :return_state && (deprecated_return_state = kws[k]; true) && continue
+        k == :stateReturn && (deprecated_return_state = kws[k]; true) && continue
         k == :ns && (tournament_selection_n = kws[k]; true) && continue
         k == :loss && (elementwise_loss = kws[k]; true) && continue
         if k == :mutationWeights
@@ -433,6 +485,15 @@ function Options(;
         error(
             "Unknown deprecated keyword argument: $k. Please update `Options(;)` to transfer this key.",
         )
+    end
+    fast_cycle && Base.depwarn("`fast_cycle` is deprecated and has no effect.", :Options)
+    if npop !== nothing
+        Base.depwarn("`npop` is deprecated. Use `population_size` instead.", :Options)
+        population_size = npop
+    end
+    if npopulations !== nothing
+        Base.depwarn("`npopulations` is deprecated. Use `populations` instead.", :Options)
+        populations = npopulations
     end
 
     if elementwise_loss === nothing
@@ -529,7 +590,7 @@ function Options(;
     if constraints !== nothing
         @assert bin_constraints === nothing
         @assert una_constraints === nothing
-        # TODO: This is redundant with the checks in EquationSearch
+        # TODO: This is redundant with the checks in equation_search
         for op in binary_operators
             @assert !(op in unary_operators)
         end
@@ -550,7 +611,7 @@ function Options(;
         complexity_of_variables !== nothing ||
         complexity_of_operators !== nothing
     )
-    if use_complexity_mapping
+    complexity_mapping = if use_complexity_mapping
         if complexity_of_operators === nothing
             complexity_of_operators = Dict()
         else
@@ -560,8 +621,16 @@ function Options(;
 
         # Get consistent type:
         promoted_type = promote_type(
-            (complexity_of_variables !== nothing) ? typeof(complexity_of_variables) : Int,
-            (complexity_of_constants !== nothing) ? typeof(complexity_of_constants) : Int,
+            if (complexity_of_variables !== nothing)
+                typeof(complexity_of_variables)
+            else
+                Int
+            end,
+            if (complexity_of_constants !== nothing)
+                typeof(complexity_of_constants)
+            else
+                Int
+            end,
             (x -> typeof(x)).(values(complexity_of_operators))...,
         )
 
@@ -582,23 +651,19 @@ function Options(;
             (complexity_of_constants !== nothing) ? complexity_of_constants : 1
         )
 
-        complexity_mapping = ComplexityMapping(;
+        ComplexityMapping(;
             binop_complexities=binop_complexities,
             unaop_complexities=unaop_complexities,
             variable_complexity=variable_complexity,
             constant_complexity=constant_complexity,
         )
     else
-        complexity_mapping = ComplexityMapping(false)
+        ComplexityMapping(false)
     end
     # Finish defining complexities
 
     if maxdepth === nothing
         maxdepth = maxsize
-    end
-
-    if npopulations === nothing
-        npopulations = nworkers()
     end
 
     if define_helper_functions
@@ -610,6 +675,7 @@ function Options(;
             unary_operators=unary_operators,
             enable_autodiff=false,  # Not needed; we just want the constructors
             define_helper_functions=true,
+            empty_old_operators=true,
         )
     end
 
@@ -621,20 +687,15 @@ function Options(;
         unary_operators=unary_operators,
         enable_autodiff=enable_autodiff,
         define_helper_functions=define_helper_functions,
+        empty_old_operators=false,
     )
 
-    if progress
-        verbosity = 0
-    end
-
-    if recorder === nothing
-        recorder = haskey(ENV, "PYSR_RECORDER") && (ENV["PYSR_RECORDER"] == "1")
-    end
-
-    if typeof(early_stop_condition) <: Real
+    early_stop_condition = if typeof(early_stop_condition) <: Real
         # Need to make explicit copy here for this to work:
         stopping_point = Float64(early_stop_condition)
-        early_stop_condition = (loss, complexity) -> loss < stopping_point
+        (loss, complexity) -> loss < stopping_point
+    else
+        early_stop_condition
     end
 
     # Parse optimizer options
@@ -676,12 +737,13 @@ function Options(;
     elseif length(predefined_nodes) == 0
         set_mutation_weights.replace_with_predefined_node = 0.0
     end
+    @assert print_precision > 0
 
     options = Options{
         eltype(complexity_mapping),
+        typeof(operators),
+        use_recorder,
         typeof(optimizer_options),
-        typeof(elementwise_loss),
-        typeof(loss_function),
         typeof(tournament_selection_weights),
     }(
         operators,
@@ -692,17 +754,17 @@ function Options(;
         tournament_selection_p,
         tournament_selection_weights,
         parsimony,
+        dimensional_constraint_penalty,
         alpha,
         maxsize,
         maxdepth,
-        fast_cycle,
         turbo,
         migration,
         hof_migration,
         should_simplify,
         should_optimize_constants,
         output_file,
-        npopulations,
+        populations,
         perturbation_factor,
         annealing,
         batching,
@@ -713,12 +775,13 @@ function Options(;
         use_frequency,
         use_frequency_in_tournament,
         adaptive_parsimony_scaling,
-        npop,
+        population_size,
         ncycles_per_iteration,
         fraction_replaced,
         fraction_replaced_hof,
         topn,
         verbosity,
+        print_precision,
         save_to_file,
         probability_negate_constant,
         nuna,
@@ -732,11 +795,10 @@ function Options(;
         optimizer_probability,
         optimizer_nrestarts,
         optimizer_options,
-        recorder,
         recorder_file,
         tournament_selection_p,
         early_stop_condition,
-        return_state,
+        deprecated_return_state,
         timeout_in_seconds,
         max_evals,
         skip_mutation_failures,

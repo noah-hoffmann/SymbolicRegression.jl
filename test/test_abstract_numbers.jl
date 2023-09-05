@@ -15,17 +15,17 @@ for T in (ComplexF16, ComplexF32, ComplexF64)
         options = SymbolicRegression.Options(;
             binary_operators=[+, *, -, /],
             unary_operators=[cos],
-            npopulations=20,
+            populations=20,
             early_stop_condition=early_stop,
             elementwise_loss=(prediction, target) -> abs2(prediction - target),
         )
 
         dataset = Dataset(X, y; loss_type=L)
         hof = if T == ComplexF16
-            EquationSearch([dataset]; options=options, niterations=1_000_000_000)
+            equation_search([dataset]; options=options, niterations=1_000_000_000)
         else
             # Should automatically find correct type:
-            EquationSearch(X, y; options=options, niterations=1_000_000_000)
+            equation_search(X, y; options=options, niterations=1_000_000_000)
         end
 
         dominating = calculate_pareto_frontier(hof)

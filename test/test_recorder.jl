@@ -1,4 +1,5 @@
 using SymbolicRegression
+import SymbolicRegression.UtilsModule: recursive_merge
 using Test
 using JSON3
 
@@ -8,16 +9,16 @@ y = 3 * cos.(X[2, :]) + X[1, :] .^ 2 .- 2
 options = SymbolicRegression.Options(;
     binary_operators=(+, *, /, -),
     unary_operators=(cos,),
-    recorder=true,
+    val_recorder=Val(true),
     recorder_file="pysr_recorder.json",
     crossover_probability=0.0,  # required for recording, as not set up to track crossovers.
-    npopulations=2,
-    npop=100,
+    populations=2,
+    population_size=100,
     maxsize=20,
     complexity_of_operators=[cos => 2],
 )
 
-hall_of_fame = EquationSearch(
+hall_of_fame = equation_search(
     X, y; niterations=5, options=options, parallelism=:multithreading
 )
 
@@ -45,3 +46,5 @@ for (i, key) in enumerate(keys(data.mutations))
         break
     end
 end
+
+@test_throws ErrorException recursive_merge()
