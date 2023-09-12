@@ -38,7 +38,7 @@ function optimize_constants(
     end
 end
 function dispatch_optimize_constants(
-    dataset::Dataset{T,L}, member::PopMember{T,L}, options::Options, idx
+    dataset::AbstractDataset{T,L}, member::PopMember{T,L}, options::Options, idx
 ) where {T<:DATA_TYPE,L<:LOSS_TYPE}
     nconst = count_constants(member.tree)
     nconst == 0 && return (member, 0.0)
