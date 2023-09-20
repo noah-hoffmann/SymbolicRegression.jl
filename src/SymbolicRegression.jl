@@ -571,7 +571,7 @@ function _equation_search(
             test_dataset_configuration(example_dataset, options, verbosity)
         else
             debug(
-                (options.verbosity > 0 || options.progress),
+                (verbosity > 0 || options.progress),
                 "Note: you are running with a custom Dataset type. No testing of the dataset configuration is performed make sure your data is correct and that you use a compatible loss function.",
             )
         end
