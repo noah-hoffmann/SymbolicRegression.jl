@@ -594,11 +594,8 @@ function _equation_search(
         if typeof(example_dataset) <: Dataset
             test_option_configuration(PARALLELISM, datasets, saved_state, options)
             test_dataset_configuration(example_dataset, options, verbosity)
-        else
-            debug(
-                (verbosity > 0 || options.progress),
-                "Note: you are running with a custom Dataset type. No testing of the dataset configuration is performed make sure your data is correct and that you use a compatible loss function.",
-            )
+        elseif verbosity > 0 || options.progress
+                @warn "Note: you are running with a custom Dataset type. No testing of the dataset configuration is performed make sure your data is correct and that you use a compatible loss function."
         end
     end
 
@@ -1048,7 +1045,7 @@ function _dispatch_s_r_cycle(;
     pop::Int,
     out::Int,
     iteration::Int,
-    dataset::Dataset,
+    dataset::AbstractDataset,
     options::Options,
     verbosity,
     in_pop::Population,
