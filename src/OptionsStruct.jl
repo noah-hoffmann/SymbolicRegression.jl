@@ -1,6 +1,8 @@
 module OptionsStructModule
 
+using DispatchDoctor: @unstable
 using Optim: Optim
+<<<<<<< HEAD
 using StatsBase: StatsBase
 import DynamicExpressions: AbstractOperatorEnum, Node
 import LossFunctions: SupervisedLoss
@@ -19,25 +21,28 @@ mutable struct MutationWeights
 end
 
 const mutations = [fieldnames(MutationWeights)...]
+=======
+using DynamicExpressions:
+    AbstractOperatorEnum, AbstractExpressionNode, AbstractExpression, OperatorEnum
+using LossFunctions: SupervisedLoss
+
+using ..DatasetModule: Dataset, batch
+using ..MutationsModule: AbstractMutation
+using ..CrossoversModule: AbstractCrossover
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 """
-    MutationWeights(;kws...)
+This struct defines how complexity is calculated.
 
-This defines how often different mutations occur. These weightings
-will be normalized to sum to 1.0 after initialization.
-# Arguments
-- `mutate_constant::Float64`: How often to mutate a constant.
-- `mutate_operator::Float64`: How often to mutate an operator.
-- `add_node::Float64`: How often to append a node to the tree.
-- `insert_node::Float64`: How often to insert a node into the tree.
-- `delete_node::Float64`: How often to delete a node from the tree.
-- `simplify::Float64`: How often to simplify the tree.
-- `randomize::Float64`: How often to create a random tree.
-- `do_nothing::Float64`: How often to do nothing.
-- `optimize::Float64`: How often to optimize the constants in the tree, as a mutation.
-  Note that this is different from `optimizer_probability`, which is
-  performed at the end of an iteration for all individuals.
+# Fields
+- `use`: Shortcut indicating whether we use custom complexities,
+    or just use 1 for everything.
+- `op_complexities`: Tuple of vectors, where each vector contains
+    the complexities for operators of that degree.
+- `variable_complexity`: Complexity of using a variable.
+- `constant_complexity`: Complexity of using a constant.
 """
+<<<<<<< HEAD
 @generated function MutationWeights(;
     mutate_constant=0.048,
     mutate_operator=0.47,
@@ -80,130 +85,354 @@ struct ComplexityMapping{T<:Real}
     unaop_complexities::Vector{T}  # Complexity of each unary operator.
     variable_complexity::T  # Complexity of using a variable.
     constant_complexity::T  # Complexity of using a constant.
+=======
+struct ComplexityMapping{T<:Real,VC<:Union{T,AbstractVector{T}},D}
+    use::Bool
+    op_complexities::NTuple{D,Vector{T}}
+    variable_complexity::VC
+    constant_complexity::T
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 end
 
 Base.eltype(::ComplexityMapping{T}) where {T} = T
 
-function ComplexityMapping(use::Bool)
-    return ComplexityMapping{Int}(use, zeros(Int, 0), zeros(Int, 0), 1, 1)
+function Base.:(==)(a::ComplexityMapping, b::ComplexityMapping)
+    return a.use == b.use &&
+           a.op_complexities == b.op_complexities &&
+           a.variable_complexity == b.variable_complexity &&
+           a.constant_complexity == b.constant_complexity
 end
 
 """Promote type when defining complexity mapping."""
 function ComplexityMapping(;
-    binop_complexities::Vector{T1},
-    unaop_complexities::Vector{T2},
-    variable_complexity::T3,
-    constant_complexity::T4,
-) where {T1<:Real,T2<:Real,T3<:Real,T4<:Real}
-    promoted_T = promote_type(T1, T2, T3, T4)
-    return ComplexityMapping{promoted_T}(
-        true,
-        binop_complexities,
-        unaop_complexities,
-        variable_complexity,
-        constant_complexity,
+    op_complexities::Tuple{Vararg{Vector,D}},
+    variable_complexity::Union{T2,AbstractVector{T2}},
+    constant_complexity::T3,
+) where {T2<:Real,T3<:Real,D}
+    T = promote_type(map(eltype, op_complexities)..., T2, T3)
+    vc = map(T, variable_complexity)
+    return ComplexityMapping{T,typeof(vc),D}(
+        true, map(Base.Fix1(map, T), op_complexities), vc, T(constant_complexity)
     )
 end
 
+function ComplexityMapping(::Nothing, ::Nothing, ::Nothing, operators::Tuple)
+    # If no customization provided, then we simply
+    # turn off the complexity mapping
+    use = false
+    return ComplexityMapping{Int,Int,length(operators)}(
+        use, ntuple(i -> Int[], Val(length(operators))), 0, 0
+    )
+end
+
+function ComplexityMapping(
+    complexity_of_operators,
+    complexity_of_variables,
+    complexity_of_constants,
+    operators::Tuple,
+)
+    _complexity_of_operators = if complexity_of_operators === nothing
+        Dict{Any,Int64}()
+    else
+        # Convert to dict:
+        Dict(complexity_of_operators)
+    end
+
+    VAR_T = if (complexity_of_variables !== nothing)
+        if complexity_of_variables isa AbstractVector
+            eltype(complexity_of_variables)
+        else
+            typeof(complexity_of_variables)
+        end
+    else
+        Int
+    end
+    CONST_T = if (complexity_of_constants !== nothing)
+        typeof(complexity_of_constants)
+    else
+        Int
+    end
+    OP_T = eltype(_complexity_of_operators).parameters[2]
+
+    T = promote_type(VAR_T, CONST_T, OP_T)
+
+    # Build operator complexities for each degree as vectors
+    op_complexities = ntuple(
+        i -> T[get(_complexity_of_operators, op, one(T)) for op in operators[i]],
+        Val(length(operators)),
+    )
+
+    variable_complexity = if complexity_of_variables !== nothing
+        map(T, complexity_of_variables)
+    else
+        one(T)
+    end
+    constant_complexity = if complexity_of_constants !== nothing
+        map(T, complexity_of_constants)
+    else
+        one(T)
+    end
+
+    return ComplexityMapping(; op_complexities, variable_complexity, constant_complexity)
+end
+
+"""
+Controls level of specialization we compile into `Options`.
+
+Overload if needed for custom expression types.
+"""
+function operator_specialization(
+    ::Type{O}, ::Type{<:AbstractExpression}
+) where {O<:AbstractOperatorEnum}
+    return O
+end
+@unstable operator_specialization(::Type{<:OperatorEnum}, ::Type{<:AbstractExpression}) =
+    OperatorEnum
+
+"""
+    AbstractOptions
+
+An abstract type that stores all search hyperparameters for SymbolicRegression.jl.
+The standard implementation is [`Options`](@ref).
+
+You may wish to create a new subtypes of `AbstractOptions` to override certain functions
+or create new behavior. Ensure that this new type has all properties of [`Options`](@ref).
+
+For example, if we have new options that we want to add to `Options`:
+
+```julia
+Base.@kwdef struct MyNewOptions
+    a::Float64 = 1.0
+    b::Int = 3
+end
+```
+
+we can create a combined options type that forwards properties to each corresponding type:
+
+```julia
+struct MyOptions{O<:SymbolicRegression.Options} <: SymbolicRegression.AbstractOptions
+    new_options::MyNewOptions
+    sr_options::O
+end
+const NEW_OPTIONS_KEYS = fieldnames(MyNewOptions)
+
+# Constructor with both sets of parameters:
+function MyOptions(; kws...)
+    new_options_keys = filter(k -> k in NEW_OPTIONS_KEYS, keys(kws))
+    new_options = MyNewOptions(; NamedTuple(new_options_keys .=> Tuple(kws[k] for k in new_options_keys))...)
+    sr_options_keys = filter(k -> !(k in NEW_OPTIONS_KEYS), keys(kws))
+    sr_options = SymbolicRegression.Options(; NamedTuple(sr_options_keys .=> Tuple(kws[k] for k in sr_options_keys))...)
+    return MyOptions(new_options, sr_options)
+end
+
+# Make all `Options` available while also making `new_options` accessible
+function Base.getproperty(options::MyOptions, k::Symbol)
+    if k in NEW_OPTIONS_KEYS
+        return getproperty(getfield(options, :new_options), k)
+    else
+        return getproperty(getfield(options, :sr_options), k)
+    end
+end
+
+Base.propertynames(options::MyOptions) = (NEW_OPTIONS_KEYS..., fieldnames(SymbolicRegression.Options)...)
+```
+
+which would let you access `a` and `b` from `MyOptions` objects, as well as making
+all properties of `Options` available for internal methods in SymbolicRegression.jl
+"""
+abstract type AbstractOptions end
+
 struct Options{
-    CT,OPT<:Optim.Options,EL<:Union{SupervisedLoss,Function},FL<:Union{Nothing,Function},W
-}
-    operators::AbstractOperatorEnum
-    bin_constraints::Vector{Tuple{Int,Int}}
-    una_constraints::Vector{Int}
-    complexity_mapping::ComplexityMapping{CT}
+    CM<:Union{ComplexityMapping,Function},
+    OP<:AbstractOperatorEnum,
+    NOPS<:Tuple,
+    OP_CONSTRAINTS<:Tuple{Vararg{Vector{<:Union{Int,Tuple{Vararg{Int}}}}}},
+    N<:AbstractExpressionNode,
+    E<:AbstractExpression,
+    EO<:NamedTuple,
+    PT<:Tuple,
+    PM,
+    _turbo,
+    _bumper,
+    _return_state,
+    AD,
+    print_precision,
+    _use_tracing,
+    B<:Union{Bool,Symbol},
+    BS<:Union{Nothing,Int},
+} <: AbstractOptions
+    operators::OP
+    op_constraints::OP_CONSTRAINTS
+    nested_constraints::Union{Vector{Tuple{Int,Int,Vector{Tuple{Int,Int,Int}}}},Nothing}
+    complexity_mapping::CM
     tournament_selection_n::Int
-    tournament_selection_p::Float32
-    tournament_selection_weights::W
-    parsimony::Float32
-    alpha::Float32
+    tournament_selection_p::Float64
+    parsimony::Float64
+    dimensional_constraint_penalty::Union{Float64,Nothing}
+    dimensionless_constants_only::Bool
     maxsize::Int
     maxdepth::Int
-    fast_cycle::Bool
-    turbo::Bool
+    turbo::Val{_turbo}
+    bumper::Val{_bumper}
     migration::Bool
     hof_migration::Bool
     should_simplify::Bool
     should_optimize_constants::Bool
-    output_file::String
-    npopulations::Int
-    perturbation_factor::Float32
-    annealing::Bool
-    batching::Bool
-    batch_size::Int
-    mutation_weights::MutationWeights
-    crossover_probability::Float32
-    warmup_maxsize_by::Float32
+    output_directory::Union{String,Nothing}
+    populations::Int
+    perturbation_factor::Float64
+    batching::B
+    batch_size::BS
+    mutations::Vector{Pair{AbstractMutation,Float64}}
+    crossovers::Vector{Pair{AbstractCrossover,Float64}}
+    crossover_probability::Float64
+    warmup_maxsize_by::Float64
     use_frequency::Bool
     use_frequency_in_tournament::Bool
     adaptive_parsimony_scaling::Float64
-    npop::Int
+    population_size::Int
     ncycles_per_iteration::Int
-    fraction_replaced::Float32
-    fraction_replaced_hof::Float32
+    fraction_replaced::Float64
+    fraction_replaced_hof::Float64
+    fraction_replaced_guesses::Float64
     topn::Int
-    verbosity::Int
+    verbosity::Union{Int,Nothing}
+    v_print_precision::Val{print_precision}
     save_to_file::Bool
-    probability_negate_constant::Float32
-    nuna::Int
-    nbin::Int
+    probability_negate_constant::Float64
+    nops::NOPS
     seed::Union{Int,Nothing}
-    elementwise_loss::EL
-    loss_function::FL
-    progress::Bool
+    elementwise_loss::Union{SupervisedLoss,Function}
+    loss_function::Union{Nothing,Function}
+    loss_function_expression::Union{Nothing,Function}
+    loss_scale::Symbol
+    node_type::Type{N}
+    expression_type::Type{E}
+    expression_options::EO
+    progress::Union{Bool,Nothing}
     terminal_width::Union{Int,Nothing}
-    optimizer_algorithm::String
-    optimizer_probability::Float32
+    optimizer_algorithm::Optim.AbstractOptimizer
+    optimizer_probability::Float64
     optimizer_nrestarts::Int
-    optimizer_options::OPT
-    recorder::Bool
-    recorder_file::String
-    prob_pick_first::Float32
+    optimizer_options::Optim.Options
+    autodiff_backend::AD
+    tracing_file::String
+    prob_pick_first::Float64
     early_stop_condition::Union{Function,Nothing}
-    return_state::Bool
+    return_state::Val{_return_state}
     timeout_in_seconds::Union{Float64,Nothing}
     max_evals::Union{Int,Nothing}
+    input_stream::IO
     skip_mutation_failures::Bool
-    nested_constraints::Union{Vector{Tuple{Int,Int,Vector{Tuple{Int,Int,Int}}}},Nothing}
     deterministic::Bool
     define_helper_functions::Bool
+<<<<<<< HEAD
     eval_batch_function::Union{Function, Nothing}
     min_length::Int
     max_length::Int
     predefined_nodes::Vector{Node}
+=======
+    use_tracing::Val{_use_tracing}
+    popmember_type::Type{PM}
+    plugins::PT
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 end
 
-function Base.print(io::IO, options::Options)
-    return print(
-        io,
-        """Options(
-    # Operators:
-        binops=$(options.operators.binops), unaops=$(options.operators.unaops),
-    # Loss:
-        loss=$(options.elementwise_loss),
-    # Complexity Management:
-        maxsize=$(options.maxsize), maxdepth=$(options.maxdepth), bin_constraints=$(options.bin_constraints), una_constraints=$(options.una_constraints), use_frequency=$(options.use_frequency), use_frequency_in_tournament=$(options.use_frequency_in_tournament), parsimony=$(options.parsimony), warmup_maxsize_by=$(options.warmup_maxsize_by), 
-    # Search Size:
-        npopulations=$(options.npopulations), ncycles_per_iteration=$(options.ncycles_per_iteration), npop=$(options.npop), 
-    # Migration:
-        migration=$(options.migration), hof_migration=$(options.hof_migration), fraction_replaced=$(options.fraction_replaced), fraction_replaced_hof=$(options.fraction_replaced_hof),
-    # Tournaments:
-        prob_pick_first=$(options.prob_pick_first), tournament_selection_n=$(options.tournament_selection_n), topn=$(options.topn), 
-    # Constant tuning:
-        perturbation_factor=$(options.perturbation_factor), probability_negate_constant=$(options.probability_negate_constant), should_optimize_constants=$(options.should_optimize_constants), optimizer_algorithm=$(options.optimizer_algorithm), optimizer_probability=$(options.optimizer_probability), optimizer_nrestarts=$(options.optimizer_nrestarts), optimizer_iterations=$(options.optimizer_options.iterations),
-    # Mutations:
-        mutation_weights=$(options.mutation_weights), crossover_probability=$(options.crossover_probability), skip_mutation_failures=$(options.skip_mutation_failures)
-    # Annealing:
-        annealing=$(options.annealing), alpha=$(options.alpha), 
-    # Speed Tweaks:
-        batching=$(options.batching), batch_size=$(options.batch_size), fast_cycle=$(options.fast_cycle), 
-    # Logistics:
-        output_file=$(options.output_file), verbosity=$(options.verbosity), seed=$(options.seed), progress=$(options.progress),
-    # Early Exit:
-        early_stop_condition=$(options.early_stop_condition), timeout_in_seconds=$(options.timeout_in_seconds),
-)""",
+@inline function use_batching(options::AbstractOptions, dataset::Dataset)
+    return options.batching === true || (
+        options.batching === :auto &&
+        dataset.n > 1000 &&
+        hasmethod(batch, Tuple{typeof(dataset),Int})
     )
 end
-Base.show(io::IO, options::Options) = Base.print(io, options)
+
+@inline function get_batch_size(options::AbstractOptions, n::Integer)
+    options.batch_size !== nothing && return min(options.batch_size, n)
+    n <= 1000 && return n
+    n < 5000 && return 128
+    n < 50000 && return 256
+    return 512
+end
+
+@inline function batching_required(options::AbstractOptions, dataset::Dataset)
+    return use_batching(options, dataset) && get_batch_size(options, dataset.n) < dataset.n
+end
+
+function Base.print(io::IO, @nospecialize(options::Options))
+    return print(
+        io,
+        "Options(" *
+        "operators=$(options.operators), "
+        # Fill in remaining fields automatically:
+        *
+        join(
+            [
+                if fieldname in
+                    (:optimizer_algorithm, :optimizer_options, :plugins, :backsolve)
+                    "$(fieldname)=..."
+                else
+                    "$(fieldname)=$(getfield(options, fieldname))"
+                end for
+                fieldname in fieldnames(Options) if fieldname ∉ [:operators, :nuna, :nbin]
+            ],
+            ", ",
+        ) *
+        ")",
+    )
+end
+function Base.show(io::IO, ::MIME"text/plain", @nospecialize(options::Options))
+    return Base.print(io, options)
+end
+
+specialized_options(options::AbstractOptions) = options
+@unstable function specialized_options(options::Options)
+    return _specialized_options(options, options.operators)
+end
+@generated function _specialized_options(
+    options::O, operators::OP
+) where {O<:Options,OP<:AbstractOperatorEnum}
+    # Return an options struct with concrete operators
+    type_parameters = O.parameters
+    fields = Any[:(getfield(options, $(QuoteNode(k)))) for k in fieldnames(O)]
+    quote
+        Options{$(type_parameters[1]),$(OP),$(type_parameters[3:end]...)}($(fields...))
+    end
+end
+
+struct WarmStartIncompatibleError <: Exception
+    fields::Vector{Symbol}
+end
+
+function Base.showerror(io::IO, e::WarmStartIncompatibleError)
+    print(io, "Warm start incompatible due to changed field(s): ")
+    join(io, e.fields, ", ")
+    return print(io, ". Use `fit!(mach, force=true)` to restart training.")
+end
+
+check_warm_start_compatibility(::AbstractOptions, ::AbstractOptions) = nothing  # LCOV_EXCL_LINE
+
+function check_warm_start_compatibility(old_options::Options, new_options::Options)
+    incompatible_fields = (
+        :operators,
+        :op_constraints,
+        :nested_constraints,
+        :complexity_mapping,
+        :dimensionless_constants_only,
+        :maxsize,
+        :maxdepth,
+        :populations,
+        :population_size,
+        :node_type,
+        :expression_type,
+        :expression_options,
+    )
+
+    changed = [
+        f for f in incompatible_fields if
+        getproperty(old_options, f) != getproperty(new_options, f)
+    ]
+    isempty(changed) || throw(WarmStartIncompatibleError(changed))
+    return nothing
+end
 
 end

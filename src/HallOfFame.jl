@@ -1,14 +1,26 @@
 module HallOfFameModule
 
+<<<<<<< HEAD
 import DynamicExpressions: Node, string_tree
 import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
 import ..PopMemberModule: PopMember, copy_pop_member
 import ..LossFunctionsModule: eval_loss
+=======
+using StyledStrings: @styled_str
+using DynamicExpressions: AbstractExpression, string_tree
+using ..UtilsModule: split_string, AnnotatedIOBuffer, dump_buffer
+using ..CoreModule:
+    AbstractOptions, Dataset, DATA_TYPE, LOSS_TYPE, relu, create_expression, init_value
+using ..ComplexityModule: compute_complexity
+using ..CheckConstraintsModule: check_constraints
+using ..PopMemberModule: AbstractPopMember, PopMember
+using ..InterfaceDynamicExpressionsModule: format_dimensions, WILDCARD_UNIT_STRING
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 using Printf: @sprintf
 
 """
-HallOfFame{T<:DATA_TYPE,L<:LOSS_TYPE}
+    HallOfFame{T<:DATA_TYPE,L<:LOSS_TYPE,N<:AbstractExpression{T},PM<:AbstractPopMember{T,L,N}}
 
 List of the best members seen all time in `.members`, with `.members[c]` being
 the best member seen at complexity c. Including only the members which actually
@@ -16,17 +28,44 @@ have been set, you can run `.members[exists]`.
 
 # Fields
 
-- `members::Array{PopMember{T,L},1}`: List of the best members seen all time.
+- `members::Array{PM,1}`: List of the best members seen all time.
     These are ordered by complexity, with `.members[1]` the member with complexity 1.
 - `exists::Array{Bool,1}`: Whether the member at the given complexity has been set.
 """
-mutable struct HallOfFame{T<:DATA_TYPE,L<:LOSS_TYPE}
-    members::Array{PopMember{T,L},1}
+struct HallOfFame{
+    T<:DATA_TYPE,L<:LOSS_TYPE,N<:AbstractExpression{T},PM<:AbstractPopMember{T,L,N}
+}
+    members::Array{PM,1}
     exists::Array{Bool,1} #Whether it has been set
+end
+function Base.show(
+    io::IO, mime::MIME"text/plain", hof::HallOfFame{T,L,N,PM}
+) where {T,L,N,PM}
+    println(io, "HallOfFame{...}:")
+    for i in eachindex(hof.members, hof.exists)
+        s_member, s_exists = if hof.exists[i]
+            sprint((io, m) -> show(io, mime, m), hof.members[i]), "true"
+        else
+            "undef", "false"
+        end
+        println(io, " "^4 * ".exists[$i] = $s_exists")
+        print(io, " "^4 * ".members[$i] =")
+        splitted = split(strip(s_member), '\n')
+        if length(splitted) == 1
+            println(io, " " * s_member)
+        else
+            println(io)
+            foreach(line -> println(io, " "^8 * line), splitted)
+        end
+    end
+    return nothing
+end
+function Base.eltype(::Union{HOF,Type{HOF}}) where {T,L,N,PM,HOF<:HallOfFame{T,L,N,PM}}
+    return PM
 end
 
 """
-    HallOfFame(options::Options, ::Type{T}, ::Type{L}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+    HallOfFame(options::AbstractOptions, dataset::Dataset{T,L}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
 
 Create empty HallOfFame. The HallOfFame stores a list
 of `PopMember` objects in `.members`, which is enumerated
@@ -35,49 +74,105 @@ by size (i.e., `.members[1]` is the constant solution).
 has been instantiated or not.
 
 Arguments:
-- `options`: Options containing specification about deterministic.
-- `T`: Type of Nodes to use in the population. e.g., `Float64`.
-- `L`: Type of loss to use in the population. e.g., `Float64`.
+- `options`: AbstractOptions containing specification about deterministic.
+- `dataset`: Dataset containing the input data.
 """
 function HallOfFame(
-    options::Options, ::Type{T}, ::Type{L}
+    options::AbstractOptions, dataset::Dataset{T,L}
 ) where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    actualMaxsize = options.maxsize + MAX_DEGREE
-    return HallOfFame{T,L}(
+    base_tree = create_expression(init_value(T), options, dataset)
+    PM = options.popmember_type
+
+    # Create a prototype member to get the concrete type
+    prototype = PM(
+        copy(base_tree),
+        L(0),
+        L(Inf),
+        options,
+        1;  # complexity
+        parent=-1,
+        deterministic=options.deterministic,
+    )
+
+    PMtype = typeof(prototype)
+
+    return HallOfFame{T,L,typeof(base_tree),PMtype}(
         [
-            PopMember(
-                Node(; val=convert(T, 1)),
-                L(0),
-                L(Inf),
-                options;
-                parent=-1,
-                deterministic=options.deterministic,
-            ) for i in 1:actualMaxsize
+            if i == 1
+                prototype
+            else
+                PM(
+                    copy(base_tree),
+                    L(0),
+                    L(Inf),
+                    options,
+                    1;  # complexity
+                    parent=-1,
+                    deterministic=options.deterministic,
+                )
+            end for i in 1:(options.maxsize)
         ],
-        [false for i in 1:actualMaxsize],
+        [false for i in 1:(options.maxsize)],
     )
 end
 
-function copy_hall_of_fame(
-    hof::HallOfFame{T,L}
-)::HallOfFame{T,L} where {T<:DATA_TYPE,L<:LOSS_TYPE}
+function Base.copy(hof::HallOfFame)
     return HallOfFame(
-        [copy_pop_member(member) for member in hof.members],
-        [exists for exists in hof.exists],
+        [copy(member) for member in hof.members], [exists for exists in hof.exists]
     )
 end
 
+function update_hall_of_fame!(
+    hall_of_fame::HallOfFame, member::AbstractPopMember, options::AbstractOptions
+)
+    size = compute_complexity(member, options)
+    0 < size <= options.maxsize || return nothing
+    check_constraints(member.tree, options, options.maxsize, size) || return nothing
+    return _update_hall_of_fame_unchecked!(hall_of_fame, member, size)
+end
+
+function _update_hall_of_fame_unchecked!(
+    hall_of_fame::HallOfFame, member::AbstractPopMember, size::Int
+)
+    0 < size <= lastindex(hall_of_fame.exists) || return nothing
+    if !hall_of_fame.exists[size] || member.cost < hall_of_fame.members[size].cost
+        hall_of_fame.members[size] = copy(member)
+        hall_of_fame.exists[size] = true
+    end
+    return nothing
+end
+
+function _update_hall_of_fame_unchecked!(
+    hall_of_fame::HallOfFame,
+    members::AbstractVector{<:AbstractPopMember},
+    options::AbstractOptions,
+)
+    for member in members
+        size = compute_complexity(member, options)
+        _update_hall_of_fame_unchecked!(hall_of_fame, member, size)
+    end
+    return nothing
+end
+
+function update_hall_of_fame!(
+    hall_of_fame::HallOfFame,
+    members::AbstractVector{<:AbstractPopMember},
+    options::AbstractOptions,
+)
+    for member in members
+        update_hall_of_fame!(hall_of_fame, member, options)
+    end
+    return nothing
+end
+
 """
-    calculate_pareto_frontier(hallOfFame::HallOfFame{T,L}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+    calculate_pareto_frontier(hallOfFame::HallOfFame{T,L,P}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
 """
-function calculate_pareto_frontier(
-    hallOfFame::HallOfFame{T,L}
-)::Vector{PopMember{T,L}} where {T<:DATA_TYPE,L<:LOSS_TYPE}
+function calculate_pareto_frontier(hallOfFame::HallOfFame{T,L,N,PM}) where {T,L,N,PM}
     # TODO - remove dataset from args.
     # Dominating pareto curve - must be better than all simpler equations
-    dominating = PopMember{T,L}[]
-    actualMaxsize = length(hallOfFame.members)
-    for size in 1:actualMaxsize
+    dominating = PM[]
+    for size in eachindex(hallOfFame.members)
         if !hallOfFame.exists[size]
             continue
         end
@@ -96,82 +191,163 @@ function calculate_pareto_frontier(
             end
         end
         if betterThanAllSmaller
-            push!(dominating, copy_pop_member(member))
+            push!(dominating, copy(member))
         end
     end
     return dominating
 end
 
-function string_dominating_pareto_curve(
-    hallOfFame, dataset, options; width::Union{Integer,Nothing}=nothing
-)
-    twidth = (width === nothing) ? 100 : max(100, width::Integer)
-    output = ""
-    curMSE = Float64(dataset.baseline_loss)
-    lastMSE = curMSE
-    lastComplexity = 0
-    output *= "Hall of Fame:\n"
-    # TODO: Get user's terminal width.
-    output *= "-"^(twidth - 1) * "\n"
-    output *= @sprintf(
-        "%-10s  %-8s   %-8s  %-8s\n", "Complexity", "Loss", "Score", "Equation"
+let header_parts = (
+        rpad(styled"{bold:{underline:Complexity}}", 10),
+        rpad(styled"{bold:{underline:Loss}}", 9),
+        rpad(styled"{bold:{underline:Score}}", 9),
+        styled"{bold:{underline:Equation}}",
     )
+    @eval const HEADER = join($(header_parts), "  ")
+    @eval const HEADER_WITHOUT_SCORE = join($(header_parts[[1, 2, 4]]), "  ")
+end
 
-    dominating = calculate_pareto_frontier(hallOfFame)
-    for member in dominating
-        complexity = compute_complexity(member, options)
+show_score_column(options::AbstractOptions) = options.loss_scale == :log
+
+function string_dominating_pareto_curve(
+    hallOfFame, dataset, options; width::Union{Integer,Nothing}=nothing, pretty::Bool=true
+)
+    terminal_width = (width === nothing) ? 100 : max(100, width::Integer)
+    buffer = AnnotatedIOBuffer(IOBuffer())
+    println(buffer, '─'^(terminal_width - 1))
+    if show_score_column(options)
+        println(buffer, HEADER)
+    else
+        println(buffer, HEADER_WITHOUT_SCORE)
+    end
+
+    formatted = format_hall_of_fame(hallOfFame, options)
+    for (tree, score, loss, complexity) in
+        zip(formatted.trees, formatted.scores, formatted.losses, formatted.complexities)
+        eqn_string = string_tree(
+            tree,
+            options;
+            display_variable_names=dataset.display_variable_names,
+            X_sym_units=dataset.X_sym_units,
+            y_sym_units=dataset.y_sym_units,
+            pretty,
+        )
+        prefix = make_prefix(tree, options, dataset)
+        eqn_string = prefix * eqn_string
+        stats_columns_string = if show_score_column(options)
+            @sprintf("%-10d  %-8.3e  %-8.3e  ", complexity, loss, score)
+        else
+            @sprintf("%-10d  %-8.3e  ", complexity, loss)
+        end
+        left_cols_width = length(stats_columns_string)
+        print(buffer, stats_columns_string)
+        print(
+            buffer,
+            wrap_equation_string(
+                eqn_string, left_cols_width + length(prefix), terminal_width
+            ),
+        )
+    end
+    print(buffer, '─'^(terminal_width - 1))
+    return dump_buffer(buffer)
+end
+function make_prefix(::AbstractExpression, ::AbstractOptions, dataset::Dataset)
+    y_prefix = dataset.y_variable_name
+    unit_str = format_dimensions(dataset.y_sym_units)
+    y_prefix *= unit_str
+    if dataset.y_sym_units === nothing && dataset.X_sym_units !== nothing
+        y_prefix *= WILDCARD_UNIT_STRING
+    end
+    return y_prefix * " = "
+end
+
+function wrap_equation_string(eqn_string, left_cols_width, terminal_width)
+    dots = "..."
+    equation_width = (terminal_width - 1) - left_cols_width - length(dots)
+
+    buffer = AnnotatedIOBuffer(IOBuffer())
+
+    forced_split_eqn = split(eqn_string, '\n')
+    print_pad = false
+    for piece in forced_split_eqn
+        subpieces = split_string(piece, equation_width)
+        for (i, subpiece) in enumerate(subpieces)
+            # We don't need dots on the last subpiece, since it
+            # is either the last row of the entire string, or it has
+            # an explicit newline in it!
+            requires_dots = i < length(subpieces)
+            print(buffer, ' '^(print_pad * left_cols_width))
+            print(buffer, subpiece)
+            if requires_dots
+                print(buffer, dots)
+            end
+            println(buffer)
+            print_pad = true
+        end
+    end
+    return dump_buffer(buffer)
+end
+
+function format_hall_of_fame(hof::HallOfFame{T,L}, options) where {T,L}
+    dominating = calculate_pareto_frontier(hof)
+
+    # Only check for negative losses if using logarithmic scaling
+    options.loss_scale == :log && for member in dominating
         if member.loss < 0.0
             throw(
                 DomainError(
                     member.loss,
-                    "Your loss function must be non-negative. To do this, consider wrapping your loss inside an exponential, which will not affect the search (unless you are using annealing).",
+                    "Your loss function must be non-negative. To allow negative losses, set the `loss_scale` to linear, or consider wrapping your loss inside an exponential.",
                 ),
             )
         end
-        curMSE = member.loss
-
-        delta_c = complexity - lastComplexity
-        ZERO_POINT = 1e-10
-        delta_l_mse = log(abs(curMSE / lastMSE) + ZERO_POINT)
-        score = convert(Float32, -delta_l_mse / delta_c)
-        eqn_string = string_tree(member.tree, options.operators; varMap=dataset.varMap)
-        base_string_length = length(@sprintf("%-10d  %-8.3e  %8.3e  ", 1, 1.0, 1.0))
-
-        dots = "..."
-        equation_width = (twidth - 1) - base_string_length - length(dots)
-
-        output *= @sprintf("%-10d  %-8.3e  %-8.3e  ", complexity, curMSE, score,)
-
-        split_eqn = split_string(eqn_string, equation_width)
-        print_pad = false
-        while length(split_eqn) > 1
-            cur_piece = popfirst!(split_eqn)
-            output *= " "^(print_pad * base_string_length) * cur_piece * dots * "\n"
-            print_pad = true
-        end
-        output *= " "^(print_pad * base_string_length) * split_eqn[1] * "\n"
-
-        lastMSE = curMSE
-        lastComplexity = complexity
     end
-    output *= "-"^(twidth - 1)
-    return output
+
+    trees = [member.tree for member in dominating]
+    losses = [member.loss for member in dominating]
+    complexities = [compute_complexity(member, options) for member in dominating]
+    scores = Array{L}(undef, length(dominating))
+
+    cur_loss = typemax(L)
+    last_loss = cur_loss
+    last_complexity = zero(eltype(complexities))
+
+    for i in 1:length(dominating)
+        complexity = complexities[i]
+        cur_loss = losses[i]
+        delta_c = complexity - last_complexity
+        scores[i] = if i == 1
+            zero(L)
+        else
+            if options.loss_scale == :linear
+                compute_direct_score(cur_loss, last_loss, delta_c)
+            else
+                compute_zero_centered_score(cur_loss, last_loss, delta_c)
+            end
+        end
+        last_loss = cur_loss
+        last_complexity = complexity
+    end
+    return (; trees, scores, losses, complexities)
+end
+function compute_direct_score(cur_loss, last_loss, delta_c)
+    delta = cur_loss - last_loss
+    return relu(-delta / delta_c)
+end
+function compute_zero_centered_score(cur_loss, last_loss, delta_c)
+    log_ratio = log(relu(cur_loss / last_loss) + eps(cur_loss))
+    return relu(-log_ratio / delta_c)
 end
 
-"""
-    split_string(s::String, n::Integer)
-
-```jldoctest
-split_string("abcdefgh", 3)
-
-# output
-
-["abc", "def", "gh"]
-```
-"""
-function split_string(s::String, n::Integer)
-    length(s) <= n && return [s]
-    return [s[i:min(i + n - 1, end)] for i in 1:n:length(s)]
+function format_hall_of_fame(hof::AbstractVector{<:HallOfFame}, options)
+    outs = [format_hall_of_fame(h, options) for h in hof]
+    return (;
+        trees=[out.trees for out in outs],
+        scores=[out.scores for out in outs],
+        losses=[out.losses for out in outs],
+        complexities=[out.complexities for out in outs],
+    )
 end
+# TODO: Re-use this in `string_dominating_pareto_curve`
 
 end

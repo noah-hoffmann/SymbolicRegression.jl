@@ -1,9 +1,12 @@
 using BenchmarkTools
 using SymbolicRegression, BenchmarkTools, Random
+using SymbolicRegression.MutateModule: next_generation
 using SymbolicRegression.AdaptiveParsimonyModule: RunningSearchStatistics
 using SymbolicRegression.PopulationModule: best_of_sample
 using SymbolicRegression.ConstantOptimizationModule: optimize_constants
 using SymbolicRegression.CheckConstraintsModule: check_constraints
+using SymbolicRegression.EvaluateInverseModule: eval_inverse_tree_array
+using Bumper, LoopVectorization
 
 function create_search_benchmark()
     suite = BenchmarkGroup()
@@ -22,14 +25,25 @@ function create_search_benchmark()
         extra_kws = merge(extra_kws, (define_helper_functions=false,))
     end
     option_kws = (;
+        defaults=v"1.0.0",
         binary_operators=(+, -, /, *),
         unary_operators=(exp, abs),
         maxsize=30,
         verbosity=0,
         progress=false,
+        mutation_weights=MutationWeights(),
         loss=(pred, target) -> (pred - target)^2,
         extra_kws...,
     )
+    if hasfield(MutationWeights, :swap_operands)
+        option_kws.mutation_weights.swap_operands = 0.0
+    end
+    if hasfield(MutationWeights, :form_connection)
+        option_kws.mutation_weights.form_connection = 0.0
+    end
+    if hasfield(MutationWeights, :break_connection)
+        option_kws.mutation_weights.break_connection = 0.0
+    end
     seeds = 1:3
     niterations = 30
     # We create an equation that cannot be found exactly, so the search
@@ -51,7 +65,7 @@ function create_search_benchmark()
         # TODO: Add determinism for other parallelisms
         function f()
             for (options, X, y) in zip(all_options[parallelism], all_X, all_y)
-                EquationSearch(X, y; options, parallelism, niterations)
+                equation_search(X, y; options, parallelism, niterations)
             end
         end
         f() # Warmup
@@ -67,19 +81,175 @@ function create_search_benchmark()
     return suite
 end
 
+function _plugin_states(options, dataset)
+    return if hasproperty(options, :plugins)
+        map(options.plugins) do plugin
+            return SymbolicRegression.init_plugin_state(plugin, options, dataset)
+        end
+    else
+        ()
+    end
+end
+
+function _setup_best_of_sample(options)
+    nfeatures = 1
+    dataset = Dataset(randn(nfeatures, 32), randn(32))
+    plugin_states = _plugin_states(options, dataset)
+    pop = if hasproperty(options, :plugins)
+        Population(dataset; npop=100, nlength=20, options, nfeatures, plugin_states)
+    else
+        Population(dataset; npop=100, nlength=20, options, nfeatures)
+    end
+    rss = RunningSearchStatistics(; options)
+    return (; pop, rss, options, plugin_states)
+end
+
+function _best_of_sample_api(state)
+    if applicable(best_of_sample, state.pop, state.options)
+        return Val(:plugin_states)
+    elseif applicable(best_of_sample, state.pop, state.rss, state.options)
+        return Val(:rss)
+    end
+    return error("Unsupported `best_of_sample` signature.")
+end
+
+function _run_best_of_sample(::Val{:plugin_states}, state)
+    return best_of_sample(state.pop, state.options; plugin_states=state.plugin_states)
+end
+function _run_best_of_sample(::Val{:rss}, state)
+    return best_of_sample(state.pop, state.rss, state.options)
+end
+
+function _setup_next_generation()
+    nfeatures = 1
+    dataset = Dataset(randn(nfeatures, 32), randn(32))
+    mutation_weights = MutationWeights(;
+        mutate_constant=1.0,
+        mutate_operator=1.0,
+        swap_operands=1.0,
+        rotate_tree=1.0,
+        add_node=1.0,
+        insert_node=1.0,
+        simplify=0.0,
+        randomize=0.0,
+        do_nothing=0.0,
+        form_connection=0.0,
+        break_connection=0.0,
+    )
+    options = Options(;
+        defaults=v"1.0.0",
+        unary_operators=[sin, cos],
+        binary_operators=[+, -, *, /],
+        mutation_weights,
+    )
+    plugin_states = _plugin_states(options, dataset)
+    trace = isdefined(SymbolicRegression, :TracingModule) ? nothing : Dict{String,Any}()
+    temperature = 1.0
+    curmaxsize = 20
+    rss = RunningSearchStatistics(; options)
+    trees = [gen_random_tree_fixed_size(15, options, nfeatures, Float64) for _ in 1:100]
+    expressions = [
+        Expression(tree; operators=options.operators, variable_names=["x1"]) for
+        tree in trees
+    ]
+    members = [
+        PopMember(dataset, expression, options; deterministic=false) for
+        expression in expressions
+    ]
+    return (; dataset, options, plugin_states, trace, temperature, curmaxsize, rss, members)
+end
+
+function _next_generation_api(state)
+    member = first(state.members)
+    if applicable(next_generation, state.dataset, member, state.curmaxsize, state.options)
+        return Val(:plugin_states)
+    elseif applicable(
+        next_generation,
+        state.dataset,
+        member,
+        state.temperature,
+        state.curmaxsize,
+        state.options,
+    )
+        return Val(:temperature)
+    elseif applicable(
+        next_generation,
+        state.dataset,
+        member,
+        state.temperature,
+        state.curmaxsize,
+        state.rss,
+        state.options,
+    )
+        return Val(:rss)
+    end
+    return error("Unsupported `next_generation` signature.")
+end
+
+const NEXT_GENERATION_USES_TRACE = isdefined(SymbolicRegression, :TracingModule)
+
+@inline function _next_generation_trace_kwargs(trace)
+    return NEXT_GENERATION_USES_TRACE ? (; tmp_trace=trace) : (; tmp_recorder=trace)
+end
+
+function _run_next_generation(::Val{:plugin_states}, state)
+    trace_kws = _next_generation_trace_kwargs(state.trace)
+    for member in state.members
+        next_generation(
+            state.dataset,
+            member,
+            state.curmaxsize,
+            state.options;
+            trace_kws...,
+            plugin_states=state.plugin_states,
+        )
+    end
+end
+function _run_next_generation(::Val{:temperature}, state)
+    trace_kws = _next_generation_trace_kwargs(state.trace)
+    for member in state.members
+        next_generation(
+            state.dataset,
+            member,
+            state.temperature,
+            state.curmaxsize,
+            state.options;
+            trace_kws...,
+            plugin_states=state.plugin_states,
+        )
+    end
+end
+function _run_next_generation(::Val{:rss}, state)
+    trace_kws = _next_generation_trace_kwargs(state.trace)
+    for member in state.members
+        next_generation(
+            state.dataset,
+            member,
+            state.temperature,
+            state.curmaxsize,
+            state.rss,
+            state.options;
+            trace_kws...,
+        )
+    end
+end
+
 function create_utils_benchmark()
     suite = BenchmarkGroup()
 
-    options = Options(; unary_operators=[sin, cos], binary_operators=[+, -, *, /])
-
+    options = Options(;
+        defaults=v"1.0.0", unary_operators=[sin, cos], binary_operators=[+, -, *, /]
+    )
+    best_of_sample_api = _best_of_sample_api(_setup_best_of_sample(options))
     suite["best_of_sample"] = @benchmarkable(
-        best_of_sample(pop, rss, $options),
-        setup = (
-            nfeatures = 1;
-            dataset = Dataset(randn(nfeatures, 32), randn(32));
-            pop = Population(dataset; npop=100, nlength=20, options=$options, nfeatures);
-            rss = RunningSearchStatistics(; options=$options)
-        )
+        _run_best_of_sample($best_of_sample_api, state),
+        setup = (state = _setup_best_of_sample($options))
+    )
+
+    next_generation_api = _next_generation_api(_setup_next_generation())
+    suite["next_generation_x100"] = @benchmarkable(
+        _run_next_generation($next_generation_api, state),
+        setup = (state = _setup_next_generation())
     )
 
     ntrees = 10
@@ -89,14 +259,14 @@ function create_utils_benchmark()
         end,
         seconds = 20,
         setup = (
-            nfeatures = 1;
-            T = Float64;
-            dataset = Dataset(randn(nfeatures, 512), randn(512));
-            ntrees = $ntrees;
-            trees = [
+            nfeatures=1;
+            T=Float64;
+            dataset=Dataset(randn(nfeatures, 512), randn(512));
+            ntrees=($ntrees);
+            trees=[
                 gen_random_tree_fixed_size(20, $options, nfeatures, T) for i in 1:ntrees
             ];
-            members = [
+            members=[
                 PopMember(dataset, tree, $options; deterministic=false) for tree in trees
             ]
         )
@@ -106,6 +276,7 @@ function create_utils_benchmark()
     suite["compute_complexity_x10"] = let s = BenchmarkGroup()
         for T in (Float64, Int, nothing)
             options = Options(;
+                defaults=v"1.0.0",
                 unary_operators=[sin, cos],
                 binary_operators=[+, -, *, /],
                 complexity_of_constants=T === nothing ? T : T(1),
@@ -115,9 +286,9 @@ function create_utils_benchmark()
                     compute_complexity(tree, $options)
                 end,
                 setup = (
-                    T = Float64;
-                    nfeatures = 3;
-                    trees = [
+                    T=Float64;
+                    nfeatures=3;
+                    trees=[
                         gen_random_tree_fixed_size(20, $options, nfeatures, T) for
                         i in 1:($ntrees)
                     ]
@@ -127,8 +298,40 @@ function create_utils_benchmark()
         s
     end
 
+    if isdefined(SymbolicRegression.MutationFunctionsModule, :randomly_rotate_tree!)
+        suite["randomly_rotate_tree_x10"] = @benchmarkable(
+            foreach(trees) do tree
+                SymbolicRegression.MutationFunctionsModule.randomly_rotate_tree!(tree)
+            end,
+            setup = (
+                T=Float64;
+                nfeatures=3;
+                trees=[
+                    gen_random_tree_fixed_size(20, $options, nfeatures, T) for
+                    i in 1:($ntrees)
+                ]
+            )
+        )
+    end
+
+    suite["insert_random_op_x10"] = @benchmarkable(
+        foreach(trees) do tree
+            SymbolicRegression.MutationFunctionsModule.insert_random_op(
+                tree, $options, nfeatures
+            )
+        end,
+        setup = (
+            T=Float64;
+            nfeatures=3;
+            trees=[
+                gen_random_tree_fixed_size(20, $options, nfeatures, T) for i in 1:($ntrees)
+            ]
+        )
+    )
+
     ntrees = 10
     options = Options(;
+        defaults=v"1.0.0",
         unary_operators=[sin, cos],
         binary_operators=[+, -, *, /],
         maxsize=30,
@@ -145,9 +348,9 @@ function create_utils_benchmark()
             check_constraints(tree, $options, $options.maxsize)
         end,
         setup = (
-            T = Float64;
-            nfeatures = 3;
-            trees = [
+            T=Float64;
+            nfeatures=3;
+            trees=[
                 gen_random_tree_fixed_size(20, $options, nfeatures, T) for i in 1:($ntrees)
             ]
         )
@@ -156,10 +359,55 @@ function create_utils_benchmark()
     return suite
 end
 
+# Inverting `y = f(..., x, ...)` for the leaf `x`, which is the hot path of the
+# backsolve mutation.
+function _setup_inverse(::Val{degree}) where {degree}
+    n = 1024
+    # Keep `2x` inside asin's domain, so that no row is masked out and the
+    # benchmark measures a full root-to-leaf inversion.
+    X = (rand(MersenneTwister(0), 1, n) .- 0.5) .* (pi / 2)
+    # Degrees 1 and 2 use a binary node type so that every revision under
+    # comparison can construct these two entries.
+    NodeT = Node{Float64,degree == 3 ? 3 : 2}
+    x = NodeT(; feature=1)
+    if degree == 1
+        operators = OperatorEnum(1 => (sin,), 2 => (+, *))
+        tree = NodeT(; op=1, children=(x,))
+    elseif degree == 2
+        operators = OperatorEnum(1 => (sin,), 2 => (+, *))
+        inner = NodeT(; op=2, children=(x, NodeT(; val=2.0)))
+        tree = NodeT(; op=1, children=(NodeT(; op=1, children=(inner,)), NodeT(; val=1.0)))
+    else
+        operators = OperatorEnum(1 => (), 2 => (+, *), 3 => (fma,))
+        tree = NodeT(; op=1, children=(x, NodeT(; val=2.0), NodeT(; val=1.0)))
+    end
+    y, _ = eval_tree_array(tree, X, operators)
+    return (; tree, X, operators, node=x, y)
+end
+
+function create_inverse_benchmark()
+    suite = BenchmarkGroup()
+
+    degrees = if isdefined(SymbolicRegression.InverseFunctionsModule, :FitExcept)
+        (1, 2, 3)
+    else
+        (1, 2)
+    end
+    for degree in degrees
+        suite["eval_inverse_tree_array_deg$(degree)"] = @benchmarkable(
+            eval_inverse_tree_array(s.tree, s.X, s.operators, s.node, s.y),
+            setup = (s = _setup_inverse(Val($degree)))
+        )
+    end
+
+    return suite
+end
+
 function create_benchmark()
     suite = BenchmarkGroup()
     suite["search"] = create_search_benchmark()
     suite["utils"] = create_utils_benchmark()
+    suite["inverse"] = create_inverse_benchmark()
     return suite
 end
 

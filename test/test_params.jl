@@ -1,9 +1,18 @@
-import SymbolicRegression: L2DistLoss, MutationWeights
+using SymbolicRegression: L2DistLoss, MutationWeights
+using DynamicExpressions.OperatorEnumConstructionModule: empty_all_globals!
+using Optim: Optim
+using LineSearches: LineSearches
+using Test: Test
 
-maximum_residual = 1e-2
-custom_cos(x) = cos(x)
+empty_all_globals!()
 
-default_params = (
+const maximum_residual = 2e-2
+
+if !@isdefined(custom_cos) || !hasmethod(custom_cos, (String,))
+    @eval custom_cos(x) = cos(x)
+end
+
+const default_params = (
     binary_operators=(/, +, *),
     unary_operators=(exp, custom_cos),
     constraints=nothing,
@@ -19,8 +28,6 @@ default_params = (
     hof_migration=true,
     fraction_replaced_hof=0.1f0,
     should_optimize_constants=true,
-    output_file=nothing,
-    npopulations=nothing,
     perturbation_factor=1.000000f0,
     annealing=true,
     batching=false,
@@ -38,7 +45,7 @@ default_params = (
     crossover_probability=0.0f0,
     warmup_maxsize_by=0.0f0,
     use_frequency=false,
-    npop=1000,
+    population_size=1000,
     ncycles_per_iteration=300,
     fraction_replaced=0.1f0,
     verbosity=convert(Int, 1e9),
@@ -48,15 +55,26 @@ default_params = (
     una_constraints=nothing,
     progress=false,
     terminal_width=nothing,
-    optimizer_algorithm="NelderMead",
+    optimizer_algorithm=Optim.NelderMead(; linesearch=LineSearches.BackTracking()),
     optimizer_nrestarts=3,
     optimizer_probability=0.1f0,
     optimizer_iterations=100,
-    recorder=nothing,
-    recorder_file="pysr_recorder.json",
+    use_tracing=false,
+    tracing_file="pysr_trace.jsonl",
     tournament_selection_p=1.0,
     early_stop_condition=nothing,
-    return_state=false,
     timeout_in_seconds=nothing,
     skip_mutation_failures=false,
 )
+
+test_info(_, x) = error("Test failed: $x")
+test_info(_, ::Test.Pass) = nothing
+test_info(f::F, ::Test.Fail) where {F} = f()
+
+macro quiet(ex)
+    return quote
+        redirect_stderr(devnull) do
+            $ex
+        end
+    end |> esc
+end

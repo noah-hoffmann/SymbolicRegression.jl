@@ -1,6 +1,7 @@
 module PopulationModule
 
 using StatsBase: StatsBase
+<<<<<<< HEAD
 import Random: randperm
 import DynamicExpressions: string_tree
 import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
@@ -10,31 +11,75 @@ import ..AdaptiveParsimonyModule: RunningSearchStatistics
 import ..MutationFunctionsModule: gen_random_tree
 import ..PopMemberModule: PopMember, copy_pop_member
 import ..UtilsModule: bottomk_fast, argmin_fast
+=======
+using DispatchDoctor: @unstable
+using DynamicExpressions: AbstractExpression, constructorof
+using ..CoreModule:
+    AbstractOptions,
+    Options,
+    Dataset,
+    DATA_TYPE,
+    LOSS_TYPE,
+    init_member,
+    resolve_init_member,
+    tournament_cost_multiplier,
+    use_batching
+using ..LossFunctionsModule: eval_cost, update_baseline_loss!
+using ..MutationFunctionsModule: gen_random_tree
+using ..PopMemberModule: AbstractPopMember, PopMember
+import ..PopMemberModule: popmember_type
+using ..UtilsModule: bottomk_fast, argmin_fast, PerTaskCache, strictmap
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 # A list of members of the population, with easy constructors,
 #  which allow for random generation of new populations
-mutable struct Population{T<:DATA_TYPE,L<:LOSS_TYPE}
-    members::Array{PopMember{T,L},1}
+struct Population{
+    T<:DATA_TYPE,L<:LOSS_TYPE,N<:AbstractExpression{T},PM<:AbstractPopMember{T,L,N}
+}
+    members::Array{PM,1}
     n::Int
 end
 """
-    Population(pop::Array{PopMember{T,L}, 1})
+    Population(pop::Array{<:AbstractPopMember, 1})
 
 Create population from list of PopMembers.
 """
-function Population(
-    pop::AP
-) where {T<:DATA_TYPE,L<:LOSS_TYPE,AP<:AbstractArray{PopMember{T,L},1}}
-    return Population{T,L}(pop, size(pop, 1))
+function Population(pop::Vector{<:AbstractPopMember})
+    return Population(pop, size(pop, 1))
 end
 
 """
+    _init_tree(dataset, options, nlength, nfeatures, ::Type{T}, plugin_states)
+
+Initialize a tree for a new population member. Asks every plugin via
+[`resolve_init_member`](@ref); at most one may return a non-`nothing`
+expression (two or more providers throw). If all plugins return `nothing`
+(the common case — no plugin overrides `init_member`), falls back to
+`gen_random_tree`.
+"""
+function _init_tree(
+    dataset, options, nlength::Int, nfeatures::Int, ::Type{T}, plugin_states::Tuple
+) where {T}
+    return @something(
+        resolve_init_member(plugin_states, options.plugins, dataset, options),
+        gen_random_tree(nlength, options, nfeatures, T),
+    )
+end
+
+"""
+<<<<<<< HEAD
     Population(dataset::AbstractDataset{T,L};
                npop::Int, nlength::Int=3, options::Options,
                nfeatures::Int)
+=======
+    Population(dataset::Dataset{T,L};
+               population_size, nlength::Int=3, options::AbstractOptions,
+               nfeatures::Int, plugin_states::Tuple)
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
-Create random population and score them on the dataset.
+Create random population and evaluate them on the dataset.
 """
 function Population(
+<<<<<<< HEAD
     dataset::AbstractDataset{T,L}; npop::Int, nlength::Int=3, options::Options, nfeatures::Int
 ) where {T<:DATA_TYPE,L<:LOSS_TYPE}
     return Population{T,L}(
@@ -42,42 +87,101 @@ function Population(
             PopMember(
                 dataset,
                 gen_random_tree(rand(options.min_length:options.max_length), options, nfeatures, T),
+=======
+    dataset::Dataset{T,L};
+    options::AbstractOptions,
+    population_size=nothing,
+    nlength::Int=3,
+    nfeatures::Int,
+    npop=nothing,
+    plugin_states::Tuple,
+) where {T,L}
+    @assert (population_size !== nothing) ⊻ (npop !== nothing)
+    population_size = something(population_size, npop)
+    PM = options.popmember_type
+
+    # Create first member to get concrete type
+    first_member = constructorof(PM)(
+        dataset,
+        _init_tree(dataset, options, nlength, nfeatures, T, plugin_states),
+        options;
+        parent=-1,
+        deterministic=options.deterministic,
+    )
+
+    # Use the concrete type for the array
+    members = typeof(first_member)[
+        if i == 1
+            first_member
+        else
+            constructorof(PM)(
+                dataset,
+                _init_tree(dataset, options, nlength, nfeatures, T, plugin_states),
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
                 options;
                 parent=-1,
                 deterministic=options.deterministic,
-            ) for i in 1:npop
-        ],
-        npop,
-    )
+            )
+        end for i in 1:population_size
+    ]
+
+    return Population(members, population_size)
 end
+
+function _population_without_plugins(
+    dataset::Dataset{T,L}; options::AbstractOptions, nlength::Int=3, nfeatures::Int
+) where {T,L}
+    PM = options.popmember_type
+    member = constructorof(PM)(
+        dataset,
+        gen_random_tree(nlength, options, nfeatures, T),
+        options;
+        parent=-1,
+        deterministic=options.deterministic,
+    )
+    return Population([member])
+end
+
 """
     Population(X::AbstractMatrix{T}, y::AbstractVector{T};
-               npop::Int, nlength::Int=3,
-               options::Options, nfeatures::Int,
-               loss_type::Type=Nothing)
+               population_size, nlength::Int=3,
+               options::AbstractOptions, nfeatures::Int,
+               loss_type::Type=Nothing, plugin_states::Tuple)
 
 Create random population and score them on the dataset.
 """
-function Population(
+@unstable function Population(
     X::AbstractMatrix{T},
     y::AbstractVector{T};
-    npop::Int,
+    population_size=nothing,
     nlength::Int=3,
-    options::Options,
+    options::AbstractOptions,
     nfeatures::Int,
-    loss_type::Type=Nothing,
-) where {T<:DATA_TYPE}
-    dataset = Dataset(X, y; loss_type=loss_type)
+    loss_type::Type{L}=Nothing,
+    npop=nothing,
+    plugin_states::Tuple,
+) where {T<:DATA_TYPE,L}
+    @assert (population_size !== nothing) ⊻ (npop !== nothing)
+    population_size = if npop === nothing
+        population_size
+    else
+        npop
+    end
+    dataset = Dataset(X, y, L)
     update_baseline_loss!(dataset, options)
-    return Population(dataset; npop=npop, options=options, nfeatures=nfeatures)
+    return Population(dataset; population_size, options, nfeatures, plugin_states)
 end
 
-function copy_population(pop::P)::P where {P<:Population}
-    return Population([copy_pop_member(pm) for pm in pop.members])
+function Base.copy(pop::P)::P where {T,L,N,PM,P<:Population{T,L,N,PM}}
+    copied_members = Vector{PM}(undef, pop.n)
+    for i in 1:(pop.n)
+        copied_members[i] = copy(pop.members[i])
+    end
+    return Population(copied_members)
 end
 
 # Sample random members of the population, and make a new one
-function sample_pop(pop::P, options::Options)::P where {P<:Population}
+function sample_pop(pop::P, options::AbstractOptions)::P where {P<:Population}
     return Population(
         StatsBase.sample(pop.members, options.tournament_selection_n; replace=false)
     )
@@ -85,66 +189,78 @@ end
 
 # Sample the population, and get the best member from that sample
 function best_of_sample(
-    pop::Population{T,L},
-    running_search_statistics::RunningSearchStatistics,
-    options::Options,
-)::PopMember{T,L} where {T<:DATA_TYPE,L<:LOSS_TYPE}
+    pop::Population{T,L,N}, options::AbstractOptions; plugin_states::Tuple
+) where {T,L,N}
     sample = sample_pop(pop, options)
-    return _best_of_sample(sample.members, running_search_statistics, options)
+    return copy(_best_of_sample(sample.members, options; plugin_states))
 end
 function _best_of_sample(
-    members::Vector{PopMember{T,L}},
-    running_search_statistics::RunningSearchStatistics,
-    options::Options,
-) where {T,L}
+    members::Vector{P}, options::AbstractOptions; plugin_states::Tuple
+) where {T,L,N,P<:AbstractPopMember{T,L,N}}
     p = options.tournament_selection_p
     n = length(members)  # == tournament_selection_n
-    scores = Vector{L}(undef, n)
-    if options.use_frequency_in_tournament
-        # Score based on frequency of that size occuring.
-        # In the end, all sizes should be just as common in the population.
-        adaptive_parsimony_scaling = L(options.adaptive_parsimony_scaling)
-        # e.g., for 100% occupied at one size, exp(-20*1) = 2.061153622438558e-9; which seems like a good punishment for dominating the population.
-
-        for i in 1:n
-            member = members[i]
-            size = compute_complexity(member, options)
-            frequency = if (0 < size <= options.maxsize)
-                L(running_search_statistics.normalized_frequencies[size])
-            else
-                L(0)
-            end
-            scores[i] = member.score * exp(adaptive_parsimony_scaling * frequency)
+    adjusted_costs = Vector{L}(undef, n)
+    for i in eachindex(members, adjusted_costs)
+        member = members[i]
+        multipliers = strictmap(options.plugins, plugin_states) do plugin, pstate
+            return L(tournament_cost_multiplier(pstate, plugin, member, options))
         end
-    else
-        map!(member -> member.score, scores, members)
+        adjusted_costs[i] = L(member.cost) * prod(multipliers)
     end
 
     chosen_idx = if p == 1.0
-        argmin_fast(scores)
+        argmin_fast(adjusted_costs)
     else
         # First, decide what place we take (usually 1st place wins):
-        tournament_winner = StatsBase.sample(options.tournament_selection_weights)
+        tournament_winner = StatsBase.sample(get_tournament_selection_weights(options))
         # Then, find the member that won that place, given
         # their fitness:
         if tournament_winner == 1
-            argmin_fast(scores)
+            argmin_fast(adjusted_costs)
         else
-            bottomk_fast(scores, tournament_winner)[2][end]
+            bottomk_fast(adjusted_costs, tournament_winner)[2][end]
         end
     end
     return members[chosen_idx]
 end
+_get_cost(member::AbstractPopMember) = member.cost
 
+<<<<<<< HEAD
 function finalize_scores(
     dataset::AbstractDataset{T,L}, pop::Population{T,L}, options::Options
 )::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     need_recalculate = options.batching
+=======
+const CACHED_WEIGHTS =
+    let init_k = collect(0:5),
+        init_prob_each = 0.5 * (1 - 0.5) .^ init_k,
+        test_weights = StatsBase.Weights(init_prob_each, sum(init_prob_each))
+
+        PerTaskCache{Dict{Tuple{Int,Float64},typeof(test_weights)}}()
+    end
+
+@unstable function get_tournament_selection_weights(@nospecialize(options::AbstractOptions))
+    n = options.tournament_selection_n::Int
+    p = options.tournament_selection_p::Float64
+    # Computing the weights for the tournament becomes quite expensive,
+    return get!(CACHED_WEIGHTS[], (n, p)) do
+        k = collect(0:(n - 1))
+        prob_each = p * ((1 - p) .^ k)
+
+        return StatsBase.Weights(prob_each, sum(prob_each))
+    end
+end
+
+function finalize_costs(
+    dataset::Dataset{T,L}, pop::P, options::AbstractOptions
+)::Tuple{P,Float64} where {T,L,P<:Population{T,L}}
+    need_recalculate = use_batching(options, dataset)
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     num_evals = 0.0
     if need_recalculate
         for member in 1:(pop.n)
-            score, loss = score_func(dataset, pop.members[member], options)
-            pop.members[member].score = score
+            cost, loss = eval_cost(dataset, pop.members[member], options)
+            pop.members[member].cost = cost
             pop.members[member].loss = loss
         end
         num_evals += pop.n
@@ -154,25 +270,13 @@ end
 
 # Return best 10 examples
 function best_sub_pop(pop::P; topn::Int=10)::P where {P<:Population}
-    best_idx = sortperm([pop.members[member].score for member in 1:(pop.n)])
-    return Population(pop.members[best_idx[1:topn]])
+    best_idx = sortperm([pop.members[member].cost for member in 1:(pop.n)])
+    # Ensure we don't try to access more elements than exist in the population
+    actual_topn = min(topn, pop.n)
+    return Population(pop.members[best_idx[1:actual_topn]])
 end
 
-function record_population(pop::Population, options::Options)::RecordType
-    return RecordType(
-        "population" => [
-            RecordType(
-                "tree" => string_tree(member.tree, options.operators),
-                "loss" => member.loss,
-                "score" => member.score,
-                "complexity" => compute_complexity(member, options),
-                "birth" => member.birth,
-                "ref" => member.ref,
-                "parent" => member.parent,
-            ) for member in pop.members
-        ],
-        "time" => time(),
-    )
-end
+# Type accessor for Population
+popmember_type(::Type{<:Population{T,L,N,PM}}) where {T,L,N,PM} = PM
 
 end

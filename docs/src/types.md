@@ -3,22 +3,13 @@
 ## Equations
 
 Equations are specified as binary trees with the `Node` type, defined
-as follows:
+as follows.
 
 ```@docs
-Node{T<:DATA_TYPE}
+Node
 ```
 
-There are a variety of constructors for `Node` objects, including:
-
-```@docs
-Node(; val::DATA_TYPE=nothing, feature::Integer=nothing)
-Node(op::Int, l::Node)
-Node(op::Int, l::Node, r::Node)
-Node(var_string::String)
-```
-
-When you create an `Options` object, the operators
+When you create an [`Options`](@ref) object, the operators
 passed are also re-defined for `Node` types.
 This allows you use, e.g., `t=Node(; feature=1) * 3f0` to create a tree, so long as
 `*` was specified as a binary operator. This works automatically for
@@ -39,7 +30,7 @@ convert(::Type{Node{T1}}, tree::Node{T2}) where {T1, T2}
 You can set a `tree` (in-place) with `set_node!`:
 
 ```@docs
-set_node!(tree::Node{T}, new_tree::Node{T}) where {T}
+set_node!
 ```
 
 You can create a copy of a node with `copy_node`:
@@ -48,47 +39,68 @@ You can create a copy of a node with `copy_node`:
 copy_node(tree::Node)
 ```
 
+## Expressions
+
+Expressions are represented using the [`Expression`](@ref) type, which combines the raw [`Node`](@ref) type with an `OperatorEnum`.
+
+```@docs
+Expression
+ExpressionSpec
+```
+
+These types allow you to define and manipulate expressions with a clear separation between the structure and the operators used.
+
+### Template Expressions
+
+Template expressions allow you to specify predefined structures and constraints for your expressions.
+These use `ComposableExpressions` as their internal expression type, which makes them
+flexible for creating a structure out of a single function.
+
+These use the `TemplateStructure` type to define how expressions should be combined and evaluated.
+
+```@docs
+TemplateExpression
+TemplateStructure
+TemplateExpressionSpec
+```
+
+You can use the `@template_spec` macro as an easy way to create a `TemplateExpressionSpec`:
+
+```@docs
+@template_spec
+```
+
+Composable expressions are used internally by `TemplateExpression` and allow you to combine multiple expressions together.
+
+```@docs
+ComposableExpression
+```
+
 ## Population
 
 Groups of equations are given as a population, which is
-an array of trees tagged with score, loss, and birthdate---these
+an array of trees tagged with cost, loss, and birthdate---these
 values are given in the `PopMember`.
 
 ```@docs
-Population(pop::Array{PopMember{T,L}, 1}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
-Population(dataset::Dataset{T,L};
-           npop::Int, nlength::Int=3,
-           options::Options,
-           nfeatures::Int) where {T<:DATA_TYPE,L<:LOSS_TYPE}
-Population(X::AbstractMatrix{T}, y::AbstractVector{T};
-           npop::Int, nlength::Int=3,
-           options::Options,
-           nfeatures::Int,
-           loss_type::Type=Nothing) where {T<:DATA_TYPE}
+Population
 ```
 
 ## Population members
 
 ```@docs
-PopMember(t::Node{T}, score::L, loss::L) where {T<:DATA_TYPE,L<:LOSS_TYPE}
-PopMember(dataset::Dataset{T,L}, t::Node{T}, options::Options) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+PopMember
 ```
 
 ## Hall of Fame
 
 ```@docs
-HallOfFame(options::Options, ::Type{T}, ::Type{L}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+HallOfFame
 ```
 
 ## Dataset
 
 ```@docs
-Dataset{T<:DATA_TYPE,L<:LOSS_TYPE}
-Dataset(X::AbstractMatrix{T},
-        y::AbstractVector{T};
-        weights::Union{AbstractVector{T}, Nothing}=nothing,
-        varMap::Union{Array{String, 1}, Nothing}=nothing,
-        loss_type::Type=Nothing,
-       ) where {T<:DATA_TYPE}
-update_baseline_loss!(dataset::Dataset{T,L}, options::Options) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+Dataset
+update_baseline_loss!
 ```

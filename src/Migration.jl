@@ -1,41 +1,37 @@
 module MigrationModule
 
-using StatsBase: StatsBase
-import ..CoreModule: Options, DATA_TYPE, LOSS_TYPE
-import ..PopulationModule: Population
-import ..PopMemberModule: PopMember, copy_pop_member_reset_birth
-import ..UtilsModule: poisson_sample
+using ..CoreModule: AbstractOptions
+using ..PopulationModule: Population
+using ..PopMemberModule: AbstractPopMember, PopMember, reset_birth!
+using ..UtilsModule: poisson_sample
 
 """
-    migrate!(migration::Pair{Population{T,L},Population{T,L}}, options::Options; frac::AbstractFloat)
+    migrate!(migration::Pair{Population{T,L},Population{T,L}}, options::AbstractOptions; frac::AbstractFloat)
 
 Migrate a fraction of the population from one population to the other, creating copies
 to do so. The original migrant population is not modified. Pass with, e.g.,
 `migrate!(migration_candidates => destination, options; frac=0.1)`
 """
 function migrate!(
-    migration::Pair{Vector{PopMember{T,L}},Population{T,L}},
-    options::Options;
-    frac::AbstractFloat,
-) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+    migration::Pair{Vector{PM},P}, options::AbstractOptions; frac::AbstractFloat
+) where {T,L,N,PM<:AbstractPopMember{T,L,N},P<:Population{T,L,N,PM}}
     base_pop = migration.second
-    npop = length(base_pop.members)
-    mean_number_replaced = npop * frac
+    population_size = length(base_pop.members)
+    mean_number_replaced = population_size * frac
     num_replace = poisson_sample(mean_number_replaced)
 
     migrant_candidates = migration.first
 
     # Ensure `replace=true` is a valid setting:
     num_replace = min(num_replace, length(migrant_candidates))
-    num_replace = min(num_replace, npop)
+    num_replace = min(num_replace, population_size)
 
-    locations = StatsBase.sample(1:npop, num_replace; replace=true)
-    migrants = StatsBase.sample(migrant_candidates, num_replace; replace=true)
+    locations = rand(1:population_size, num_replace)
+    migrants = rand(migrant_candidates, num_replace)
 
     for (i, migrant) in zip(locations, migrants)
-        base_pop.members[i] = copy_pop_member_reset_birth(
-            migrant; deterministic=options.deterministic
-        )
+        base_pop.members[i] = copy(migrant)
+        reset_birth!(base_pop.members[i]; options.deterministic)
     end
     return nothing
 end

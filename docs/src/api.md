@@ -1,37 +1,42 @@
 # API
 
-## EquationSearch
+## Regressor interface
 
 ```@docs
-EquationSearch(X::AbstractMatrix{T}, y::AbstractMatrix{T};
-        niterations::Int=10,
-        weights::Union{AbstractVector{T}, Nothing}=nothing,
-        varMap::Union{Array{String, 1}, Nothing}=nothing,
-        options::Options=Options(),
-        numprocs::Union{Int, Nothing}=nothing,
-        procs::Union{Array{Int, 1}, Nothing}=nothing,
-        runtests::Bool=true,
-        loss_type::Type=Nothing,
-) where {T<:DATA_TYPE}
+SRRegressor
+MultitargetSRRegressor
+```
+
+## Low-Level API
+
+```@docs
+equation_search
+```
+
+## Template Expressions
+
+```@docs
+@template_spec
 ```
 
 ## Options
 
 ```@docs
-Options(;)
-MutationWeights(;)
+Options
+MutationWeights
 ```
 
 ## Printing
 
 ```@docs
-string_tree(tree::Node, options::Options; kws...)
+string_tree
 ```
 
 ## Evaluation
 
 ```@docs
-eval_tree_array(tree::Node, X::AbstractMatrix, options::Options; kws...)
+eval_tree_array
+EvalContext
 ```
 
 ## Derivatives
@@ -44,20 +49,41 @@ all variables (or, all constants). Both use forward-mode automatic, but use
 `Zygote.jl` to compute derivatives of each operator, so this is very efficient.
 
 ```@docs
-eval_diff_tree_array(tree::Node, X::AbstractMatrix, options::Options, direction::Int)
-eval_grad_tree_array(tree::Node, X::AbstractMatrix, options::Options; kws...)
+eval_diff_tree_array
+eval_grad_tree_array
 ```
 
 ## SymbolicUtils.jl interface
 
 ```@docs
-node_to_symbolic(tree::Node, options::Options; 
-                     varMap::Union{Array{String, 1}, Nothing}=nothing,
-                     index_functions::Bool=false)
+node_to_symbolic
 ```
+
+Note that use of this function requires `SymbolicUtils.jl` to be installed and loaded.
 
 ## Pareto frontier
 
 ```@docs
-calculate_pareto_frontier(hallOfFame::HallOfFame{T,L}) where {T<:DATA_TYPE,L<:LOSS_TYPE}
+calculate_pareto_frontier
+```
+
+## Logging
+
+```@docs
+SRLogger
+```
+
+The `SRLogger` allows you to track the progress of symbolic regression searches.
+It can wrap any `AbstractLogger` that implements the Julia logging interface,
+such as from TensorBoardLogger.jl or Wandb.jl.
+
+```julia
+using TensorBoardLogger
+
+logger = SRLogger(TBLogger("logs/run"), log_interval=2)
+
+model = SRRegressor(;
+    logger=logger,
+    kws...
+)
 ```

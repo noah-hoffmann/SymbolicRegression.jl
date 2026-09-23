@@ -1,5 +1,6 @@
 module SingleIterationModule
 
+<<<<<<< HEAD
 import DynamicExpressions: string_tree, simplify_tree, combine_operators
 import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
 import ..ComplexityModule: compute_complexity
@@ -11,49 +12,78 @@ import ..AdaptiveParsimonyModule: RunningSearchStatistics
 import ..RegularizedEvolutionModule: reg_evol_cycle
 import ..ConstantOptimizationModule: optimize_constants
 import ..RecorderModule: @recorder
+=======
+using ADTypes: AutoEnzyme
+using DynamicExpressions: AbstractExpression, simplify_tree!, combine_operators
+using ..UtilsModule: @threads_if, strictmap
+using ..CoreModule:
+    AbstractOptions,
+    Dataset,
+    MaybeTrace,
+    create_expression,
+    batch,
+    get_batch_size,
+    batching_required,
+    on_cycle_start!,
+    on_cycle_end!
+using ..PopMemberModule: generate_reference
+using ..PopulationModule: Population, finalize_costs
+using ..HallOfFameModule: HallOfFame, _update_hall_of_fame_unchecked!
+using ..RegularizedEvolutionModule: reg_evol_cycle
+using ..LossFunctionsModule: create_eval_context, eval_cost
+using ..ConstantOptimizationModule: optimize_constants
+using ..TracingModule: trace_optimization!
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 # Cycle through regularized evolution many times,
 # printing the fittest equation every 10% through
 function s_r_cycle(
+<<<<<<< HEAD
     dataset::AbstractDataset{T,L},
     pop::Population{T,L},
+=======
+    dataset::D,
+    pop::P,
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     ncycles::Int,
-    curmaxsize::Int,
-    running_search_statistics::RunningSearchStatistics;
+    curmaxsize::Int;
     verbosity::Int=0,
-    options::Options,
-    record::RecordType,
-)::Tuple{Population{T,L},HallOfFame{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    max_temp = 1.0
-    min_temp = 0.0
-    if !options.annealing
-        min_temp = max_temp
-    end
-    all_temperatures = LinRange(max_temp, min_temp, ncycles)
-    best_examples_seen = HallOfFame(options, T, L)
+    options::AbstractOptions,
+    trace::MaybeTrace,
+    plugin_states::Tuple,
+)::Tuple{
+    P,HallOfFame{T,L,N},Float64
+} where {T,L,D<:Dataset{T,L},N<:AbstractExpression{T},P<:Population{T,L,N}}
+    best_examples_seen = HallOfFame(options, dataset)
     num_evals = 0.0
 
-    for temperature in all_temperatures
+    batched_dataset = if batching_required(options, dataset)
+        batch(dataset, get_batch_size(options, dataset.n))
+    else
+        dataset
+    end
+    eval_context = create_eval_context(batched_dataset, options, curmaxsize)
+
+    for cycle_idx in 1:ncycles
+        strictmap(options.plugins, plugin_states) do plugin, pstate
+            return on_cycle_start!(pstate, plugin, cycle_idx, ncycles, options)
+        end
         pop, tmp_num_evals = reg_evol_cycle(
-            dataset,
+            batched_dataset,
             pop,
-            temperature,
             curmaxsize,
-            running_search_statistics,
             options,
-            record,
+            trace;
+            plugin_states,
+            best_seen=best_examples_seen,
+            eval_context,
         )
         num_evals += tmp_num_evals
-        for member in pop.members
-            size = compute_complexity(member, options)
-            score = member.score
-            if 0 < size <= options.maxsize && (
-                !best_examples_seen.exists[size] ||
-                score < best_examples_seen.members[size].score
+        _update_hall_of_fame_unchecked!(best_examples_seen, pop.members, options)
+        strictmap(options.plugins, plugin_states) do plugin, pstate
+            return on_cycle_end!(
+                pstate, plugin, pop, batched_dataset, best_examples_seen, options
             )
-                best_examples_seen.exists[size] = true
-                best_examples_seen.members[size] = copy_pop_member(member)
-            end
         end
     end
 
@@ -61,71 +91,57 @@ function s_r_cycle(
 end
 
 function optimize_and_simplify_population(
+<<<<<<< HEAD
     dataset::AbstractDataset{T,L},
     pop::Population{T,L},
     options::Options,
     curmaxsize::Int,
     record::RecordType,
 )::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
+=======
+    dataset::D, pop::P, options::AbstractOptions, curmaxsize::Int, trace::MaybeTrace
+)::Tuple{P,Float64} where {T,L,D<:Dataset{T,L},P<:Population{T,L}}
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     array_num_evals = zeros(Float64, pop.n)
     do_optimization = rand(pop.n) .< options.optimizer_probability
-    for j in 1:(pop.n)
+    # Note: we have to turn off this threading loop due to Enzyme, since we need
+    # to manually allocate a new task with a larger stack for Enzyme.
+    should_thread = !(options.deterministic) && !(isa(options.autodiff_backend, AutoEnzyme))
+
+    batched_dataset = if batching_required(options, dataset)
+        batch(dataset, get_batch_size(options, dataset.n))
+    else
+        dataset
+    end
+
+    @threads_if should_thread for j in 1:(pop.n)
         if options.should_simplify
             tree = pop.members[j].tree
-            tree = simplify_tree(tree, options.operators)
+            tree = simplify_tree!(tree, options.operators)
             tree = combine_operators(tree, options.operators)
             pop.members[j].tree = tree
         end
         if options.should_optimize_constants && do_optimization[j]
+            # TODO: Might want to do full batch optimization here?
             pop.members[j], array_num_evals[j] = optimize_constants(
-                dataset, pop.members[j], options
+                batched_dataset, pop.members[j], options
             )
         end
     end
     num_evals = sum(array_num_evals)
-    pop, tmp_num_evals = finalize_scores(dataset, pop, options)
+    pop, tmp_num_evals = finalize_costs(dataset, pop, options)
     num_evals += tmp_num_evals
 
-    # Now, we create new references for every member,
-    # and optionally record which operations occurred.
+    # Now, we create new references for every member.
     for j in 1:(pop.n)
         old_ref = pop.members[j].ref
         new_ref = generate_reference()
         pop.members[j].parent = old_ref
         pop.members[j].ref = new_ref
 
-        @recorder begin
-            # Same structure as in RegularizedEvolution.jl,
-            # except we assume that the record already exists.
-            @assert haskey(record, "mutations")
-            member = pop.members[j]
-            if !haskey(record["mutations"], "$(member.ref)")
-                record["mutations"]["$(member.ref)"] = RecordType(
-                    "events" => Vector{RecordType}(),
-                    "tree" => string_tree(member.tree, options.operators),
-                    "score" => member.score,
-                    "loss" => member.loss,
-                    "parent" => member.parent,
-                )
-            end
-            optimize_and_simplify_event = RecordType(
-                "type" => "tuning",
-                "time" => time(),
-                "child" => new_ref,
-                "mutation" => RecordType(
-                    "type" =>
-                        if (do_optimization[j] && options.should_optimize_constants)
-                            "simplification_and_optimization"
-                        else
-                            "simplification"
-                        end,
-                ),
-            )
-            death_event = RecordType("type" => "death", "time" => time())
-
-            push!(record["mutations"]["$(old_ref)"]["events"], optimize_and_simplify_event)
-            push!(record["mutations"]["$(old_ref)"]["events"], death_event)
-        end
+        trace_optimization!(
+            trace, pop.members[j], old_ref, new_ref, do_optimization[j], options
+        )
     end
     return (pop, num_evals)
 end

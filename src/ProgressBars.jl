@@ -1,39 +1,57 @@
 module ProgressBarsModule
 
-import ProgressBars: ProgressBar, set_multiline_postfix
+using Compat: Fix
+using ProgressMeter: ProgressMeter, Progress
+using StyledStrings: @styled_str, annotatedstring
+using ..UtilsModule: AnnotatedString
 
 # Simple wrapper for a progress bar which stores its own state
 mutable struct WrappedProgressBar
-    bar::ProgressBar
-    state::Union{Int,Nothing}
-    cycle::Union{Int,Nothing}
+    bar::Progress
+    postfix::Vector{Tuple{AnnotatedString,AnnotatedString}}
 
-    function WrappedProgressBar(args...; kwargs...)
-        if haskey(ENV, "SYMBOLIC_REGRESSION_TEST") &&
-            ENV["SYMBOLIC_REGRESSION_TEST"] == "true"
-            output_stream = devnull
-            return new(ProgressBar(args...; output_stream, kwargs...), nothing, nothing)
+    function WrappedProgressBar(n::Integer, niterations::Integer; kwargs...)
+        init_vector = Tuple{AnnotatedString,AnnotatedString}[]
+        kwargs = (; kwargs..., desc="Evolving for $niterations iterations...")
+        if get(ENV, "SYMBOLIC_REGRESSION_TEST", "false") == "true"
+            # For testing, create a progress bar that writes to devnull
+            output = devnull
+            return new(Progress(n; output, kwargs...), init_vector)
         end
-        return new(ProgressBar(args...; kwargs...), nothing, nothing)
+        return new(Progress(n; kwargs...), init_vector)
     end
 end
 
-"""Iterate a progress bar without needing to store cycle/state externally."""
-function manually_iterate!(progress_bar::WrappedProgressBar)
-    cur_cycle = progress_bar.cycle
-    cur_state = progress_bar.state
-    if cur_cycle === nothing
-        cur_cycle, cur_state = iterate(progress_bar.bar)
-    else
-        cur_cycle, cur_state = iterate(progress_bar.bar, cur_state)
-    end
-    progress_bar.cycle = cur_cycle
-    progress_bar.state = cur_state
+function barlen(pbar::WrappedProgressBar)::Int
+    return @something(pbar.bar.barlen, displaysize(stdout)[2])
+end
+
+function ProgressMeter.finish!(pbar::WrappedProgressBar)
+    ProgressMeter.finish!(pbar.bar)
     return nothing
 end
 
-function set_multiline_postfix!(t::WrappedProgressBar, postfix::AbstractString)
-    return set_multiline_postfix(t.bar, postfix)
+"""Set a progress bar to a given value."""
+function manually_iterate!(pbar::WrappedProgressBar, value::Int)
+    width = barlen(pbar)
+    postfix = map(Fix{2}(format_for_meter, width), pbar.postfix)
+    ProgressMeter.update!(pbar.bar, value; showvalues=postfix, valuecolor=:none)
+    return nothing
+end
+
+function format_for_meter((k, s), width::Integer)
+    new_s = if occursin('\n', s)
+        left_margin = length("  $(string(k)):  ")
+        left_padding = ' '^(width - left_margin)
+        annotatedstring(left_padding, newlines_to_spaces(s, width))
+    else
+        s
+    end
+    return (k, new_s)
+end
+
+function newlines_to_spaces(s::AbstractString, width::Integer)
+    return join(rpad(line, width) for line in split(s, '\n'))
 end
 
 end

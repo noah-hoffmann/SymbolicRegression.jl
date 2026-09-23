@@ -1,5 +1,6 @@
 module RegularizedEvolutionModule
 
+<<<<<<< HEAD
 import Random: shuffle!
 import DynamicExpressions: string_tree
 import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
@@ -9,150 +10,238 @@ import ..AdaptiveParsimonyModule: RunningSearchStatistics
 import ..MutateModule: next_generation, crossover_generation
 import ..RecorderModule: @recorder
 import ..UtilsModule: argmin_fast
+=======
+using ..CoreModule:
+    AbstractOptions,
+    Dataset,
+    MaybeTrace,
+    DATA_TYPE,
+    LOSS_TYPE,
+    MutationStepResult,
+    wrap_mutation_step
+using ..PopulationModule: Population, best_of_sample
+using ..HallOfFameModule: HallOfFame, update_hall_of_fame!, _update_hall_of_fame_unchecked!
+using ..ComplexityModule: compute_complexity
+using ..MutateModule: next_generation
+using ..CrossoverModule: crossover_generation
+using ..TracingModule:
+    new_trace,
+    new_step_trace,
+    new_traced_steps,
+    reset_traced_steps!,
+    trace_crossover!,
+    trace_mutation_attempts!,
+    trace_mutation_step!
+using ..UtilsModule: argmin_fast, strictmap
+
+"""
+One precomposed mutation-middleware layer.
+"""
+struct MutationStepLayer{W,F}
+    wrapper::W
+    next_step::F
+end
+@inline function (layer::MutationStepLayer)(parent)
+    return layer.wrapper(parent, layer.next_step)
+end
+
+build_mutation_step(::Tuple{}, base_step) = base_step
+function build_mutation_step(wrappers::Tuple, base_step::F) where {F}
+    inner = build_mutation_step(Base.tail(wrappers), base_step)
+    return _add_mutation_step_layer(first(wrappers), inner)
+end
+_add_mutation_step_layer(::Nothing, inner) = inner
+function _add_mutation_step_layer(wrapper, inner)  # COV_EXCL_LINE
+    return MutationStepLayer(wrapper, inner)
+end
+
+"""
+Engine-owned state for one mutation step. Mutable contents accumulate every
+middleware attempt so evaluation counts, Hall-of-Fame updates, and tracing
+stay under engine control.
+"""
+struct MutationStep{D,P,O,S,E,H,A,M,R}
+    dataset::D
+    population::P
+    curmaxsize::Int
+    options::O
+    plugin_states::S
+    eval_context::E
+    best_seen::H
+    attempted_results::A
+    attempted_members::M
+    traced_steps::R
+end
+
+function (step::MutationStep)(parent)
+    step_trace = new_step_trace(step.traced_steps)
+    member, accepted, num_evals = next_generation(
+        step.dataset,
+        parent,
+        step.curmaxsize,
+        step.options;
+        tmp_trace=step_trace,
+        plugin_states=step.plugin_states,
+        eval_context=step.eval_context,
+        population_for_backsolve=step.population,
+    )
+    attempt_id = isnothing(step.attempted_results) ? 1 : length(step.attempted_results) + 1
+    result = MutationStepResult(member, accepted, attempt_id, num_evals)
+    !isnothing(step.attempted_results) && push!(step.attempted_results, result)
+    !isnothing(step.attempted_members) && push!(step.attempted_members, copy(member))
+    trace_mutation_step!(step.traced_steps, parent, member, step_trace)
+    accepted &&
+        !isnothing(step.attempted_members) &&
+        update_hall_of_fame!(step.best_seen, member, step.options)
+    return result
+end
+
+function reset!(step::MutationStep)
+    !isnothing(step.attempted_results) && empty!(step.attempted_results)
+    !isnothing(step.attempted_members) && empty!(step.attempted_members)
+    reset_traced_steps!(step.traced_steps)
+    return nothing
+end
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 # Pass through the population several times, replacing the oldest
 # with the fittest of a small subsample
 function reg_evol_cycle(
+<<<<<<< HEAD
     dataset::AbstractDataset{T,L},
     pop::Population{T,L},
     temperature,
+=======
+    dataset::Dataset{T,L},
+    pop::P,
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     curmaxsize::Int,
-    running_search_statistics::RunningSearchStatistics,
-    options::Options,
-    record::RecordType,
-)::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    # Batch over each subsample. Can give 15% improvement in speed; probably moreso for large pops.
-    # but is ultimately a different algorithm than regularized evolution, and might not be
-    # as good.
-    if options.crossover_probability > 0.0
-        @recorder error("You cannot have the recorder on when using crossover")
-    end
-
+    options::AbstractOptions,
+    trace::MaybeTrace;
+    plugin_states::Tuple,
+    best_seen::HallOfFame,
+    eval_context=nothing,
+)::Tuple{P,Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE,P<:Population{T,L}}
     num_evals = 0.0
     n_evol_cycles = ceil(Int, pop.n / options.tournament_selection_n)
+    mutation_wrappers = strictmap(wrap_mutation_step, plugin_states, options.plugins)
+    traced_steps = new_traced_steps(trace, eltype(pop.members))
+    has_mutation_wrappers = any(!isnothing, mutation_wrappers)
+    attempted_results =
+        has_mutation_wrappers ? MutationStepResult{eltype(pop.members)}[] : nothing
+    attempted_members = has_mutation_wrappers ? eltype(pop.members)[] : nothing
+    base_step = MutationStep(
+        dataset,
+        pop,
+        curmaxsize,
+        options,
+        plugin_states,
+        eval_context,
+        best_seen,
+        attempted_results,
+        attempted_members,
+        traced_steps,
+    )
+    wrapped_step = build_mutation_step(mutation_wrappers, base_step)
 
-    if options.fast_cycle
-
-        # These options are not implemented for fast_cycle:
-        @recorder error(
-            "You cannot have the recorder and fast_cycle set to true at the same time!"
-        )
-        @assert options.prob_pick_first == 1.0
-        @assert options.crossover_probability == 0.0
-
-        shuffle!(pop.members)
-        babies = Array{PopMember}(undef, n_evol_cycles)
-        accepted = Array{Bool}(undef, n_evol_cycles)
-        array_num_evals = Array{Float64}(undef, n_evol_cycles)
-
-        # Iterate each tournament_selection_n-member sub-sample
-        Threads.@threads for i in 1:n_evol_cycles
-            best_score = Inf
-            best_idx = 1 + (i - 1) * options.tournament_selection_n
-            # Calculate best member of the subsample:
-            for sub_i in
-                (1 + (i - 1) * options.tournament_selection_n):(i * options.tournament_selection_n)
-                if pop.members[sub_i].score < best_score
-                    best_score = pop.members[sub_i].score
-                    best_idx = sub_i
-                end
+    for i in 1:n_evol_cycles
+        if rand() > options.crossover_probability
+            allstar = best_of_sample(pop, options; plugin_states)
+            reset!(base_step)
+            result = wrapped_step(allstar)
+            selected_attempt_idx = result.attempt_id
+            selected_result = if isnothing(base_step.attempted_results)
+                num_evals += result.num_evals
+                result
+            else
+                checkbounds(Bool, base_step.attempted_results, selected_attempt_idx) ||
+                    throw(
+                        ArgumentError(
+                            "Mutation middleware must return a result from `next_step`."
+                        ),
+                    )
+                num_evals += sum(attempt -> attempt.num_evals, base_step.attempted_results)
+                base_step.attempted_results[selected_attempt_idx]
             end
-            allstar = pop.members[best_idx]
-            mutation_recorder = RecordType()
-            babies[i], accepted[i], array_num_evals[i] = next_generation(
-                dataset,
-                allstar,
-                temperature,
-                curmaxsize,
-                running_search_statistics,
-                options;
-                tmp_recorder=mutation_recorder,
+            baby = if isnothing(base_step.attempted_members)
+                selected_result.member
+            else
+                base_step.attempted_members[selected_attempt_idx]
+            end
+            mutation_accepted = selected_result.accepted
+
+            should_replace = mutation_accepted || !options.skip_mutation_failures
+            oldest = if should_replace
+                argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
+            else
+                0
+            end
+
+            trace_mutation_attempts!(
+                trace,
+                traced_steps,
+                pop,
+                oldest,
+                should_replace,
+                selected_attempt_idx,
+                options,
             )
-        end
-        num_evals = sum(array_num_evals)
 
-        # Replace the n_evol_cycles-oldest members of each population
-        for i in 1:n_evol_cycles
-            oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
-            if accepted[i] || !options.skip_mutation_failures
-                pop.members[oldest] = babies[i]
-            end
-        end
-    else
-        for i in 1:n_evol_cycles
-            if rand() > options.crossover_probability
-                allstar = best_of_sample(pop, running_search_statistics, options)
-                mutation_recorder = RecordType()
-                baby, mutation_accepted, tmp_num_evals = next_generation(
-                    dataset,
-                    allstar,
-                    temperature,
-                    curmaxsize,
-                    running_search_statistics,
-                    options;
-                    tmp_recorder=mutation_recorder,
+            should_replace || continue
+            pop.members[oldest] = baby
+
+        else # Crossover
+            allstar1 = best_of_sample(pop, options; plugin_states)
+            allstar2 = best_of_sample(pop, options; plugin_states)
+
+            crossover_trace = new_trace(trace)
+            baby1, baby2, crossover_accepted, tmp_num_evals = crossover_generation(
+                allstar1,
+                allstar2,
+                dataset,
+                curmaxsize,
+                options;
+                trace=crossover_trace,
+                plugin_states,
+                eval_context,
+            )
+            num_evals += tmp_num_evals
+            if crossover_accepted
+                _update_hall_of_fame_unchecked!(
+                    best_seen, baby1, compute_complexity(baby1, options)
                 )
-                num_evals += tmp_num_evals
-
-                if !mutation_accepted && options.skip_mutation_failures
-                    # Skip this mutation rather than replacing oldest member with unchanged member
-                    continue
-                end
-
-                oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
-
-                @recorder begin
-                    if !haskey(record, "mutations")
-                        record["mutations"] = RecordType()
-                    end
-                    for member in [allstar, baby, pop.members[oldest]]
-                        if !haskey(record["mutations"], "$(member.ref)")
-                            record["mutations"]["$(member.ref)"] = RecordType(
-                                "events" => Vector{RecordType}(),
-                                "tree" => string_tree(member.tree, options.operators),
-                                "score" => member.score,
-                                "loss" => member.loss,
-                                "parent" => member.parent,
-                            )
-                        end
-                    end
-                    mutate_event = RecordType(
-                        "type" => "mutate",
-                        "time" => time(),
-                        "child" => baby.ref,
-                        "mutation" => mutation_recorder,
-                    )
-                    death_event = RecordType("type" => "death", "time" => time())
-
-                    # Put in random key rather than vector; otherwise there are collisions!
-                    push!(record["mutations"]["$(allstar.ref)"]["events"], mutate_event)
-                    push!(
-                        record["mutations"]["$(pop.members[oldest].ref)"]["events"],
-                        death_event,
-                    )
-                end
-
-                pop.members[oldest] = baby
-
-            else # Crossover
-                allstar1 = best_of_sample(pop, running_search_statistics, options)
-                allstar2 = best_of_sample(pop, running_search_statistics, options)
-
-                baby1, baby2, crossover_accepted, tmp_num_evals = crossover_generation(
-                    allstar1, allstar2, dataset, curmaxsize, options
+                _update_hall_of_fame_unchecked!(
+                    best_seen, baby2, compute_complexity(baby2, options)
                 )
-                num_evals += tmp_num_evals
-
-                if !crossover_accepted && options.skip_mutation_failures
-                    continue
-                end
-
-                # Replace old members with new ones:
-                oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
-                pop.members[oldest] = baby1
-                oldest = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
-                pop.members[oldest] = baby2
             end
+
+            if !crossover_accepted && options.skip_mutation_failures
+                continue
+            end
+
+            # Find the oldest members to replace:
+            oldest1 = argmin_fast([pop.members[member].birth for member in 1:(pop.n)])
+            BT = typeof(first(pop.members).birth)
+            oldest2 = argmin_fast([
+                i == oldest1 ? typemax(BT) : pop.members[i].birth for i in 1:(pop.n)
+            ])
+
+            trace_crossover!(
+                trace,
+                allstar1,
+                allstar2,
+                baby1,
+                baby2,
+                pop,
+                oldest1,
+                oldest2,
+                crossover_trace,
+                options,
+            )
+
+            # Replace old members with new ones:
+            pop.members[oldest1] = baby1
+            pop.members[oldest2] = baby2
         end
     end
 

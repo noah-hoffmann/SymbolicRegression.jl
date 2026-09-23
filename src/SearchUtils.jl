@@ -3,18 +3,281 @@
 This includes: process management, stdin reading, checking for early stops."""
 module SearchUtilsModule
 
-import Printf: @printf, @sprintf
-using Distributed
-import StatsBase: mean
+using Printf: @printf, @sprintf
+using Dates: Dates
+using Distributed: Distributed, @spawnat, Future, procs, addprocs
+using StatsBase: mean
+using StyledStrings: @styled_str
+using DispatchDoctor: @unstable
+using Logging: AbstractLogger
 
+<<<<<<< HEAD
 import ..CoreModule: Dataset, AbstractDataset, Options
 import ..ComplexityModule: compute_complexity
 import ..PopulationModule: Population, copy_population
 import ..HallOfFameModule:
     HallOfFame, copy_hall_of_fame, calculate_pareto_frontier, string_dominating_pareto_curve
 import ..ProgressBarsModule: WrappedProgressBar, set_multiline_postfix!, manually_iterate!
+=======
+using DynamicExpressions:
+    AbstractExpression,
+    string_tree,
+    parse_expression,
+    EvalContext,
+    with_type_parameters,
+    constructorof
+using ..UtilsModule: subscriptify
+using ..CoreModule:
+    Dataset,
+    AbstractOptions,
+    Options,
+    MaybeTrace,
+    max_features,
+    create_expression,
+    init_value,
+    parse_scope
+using ..ComplexityModule: compute_complexity
+using ..PopulationModule: Population, _population_without_plugins
+using ..PopMemberModule: PopMember, AbstractPopMember
+using ..HallOfFameModule: HallOfFame, string_dominating_pareto_curve, update_hall_of_fame!
+using ..ConstantOptimizationModule: optimize_constants
+using ..ProgressBarsModule: WrappedProgressBar, manually_iterate!, barlen
+using ..ExpressionBuilderModule: strip_metadata
+using ..InterfaceDynamicExpressionsModule: takes_eval_context
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
-function next_worker(worker_assignment::Dict{Tuple{Int,Int},Int}, procs::Vector{Int})::Int
+function logging_callback! end
+
+@unstable @inline function infer_popmember_type(
+    ::Type{T}, ::Type{L}, dataset::D, options
+) where {T,L,D<:Dataset}
+    NodeType = with_type_parameters(options.node_type, T)
+    prototype = constructorof(NodeType)(; val=init_value(T))
+    N = typeof(create_expression(prototype, options, dataset))
+    return with_type_parameters(options.popmember_type, T, L, N)
+end
+
+"""
+    @filtered_async expr
+
+Like `@async` but with error monitoring that ignores `Distributed.ProcessExitedException`
+to avoid spam when worker processes exit normally.
+"""
+macro filtered_async(expr)
+    return esc(
+        quote
+            $(Base).errormonitor(@async begin
+                try
+                    $expr
+                catch ex
+                    if !(ex isa $(Distributed).ProcessExitedException)
+                        rethrow(ex)
+                    end
+                end
+            end)
+        end
+    )
+end
+
+"""
+    AbstractRuntimeOptions
+
+An abstract type representing runtime configuration parameters for the symbolic regression algorithm.
+
+`AbstractRuntimeOptions` is used by `equation_search` to control runtime aspects such
+as parallelism and iteration limits. By subtyping `AbstractRuntimeOptions`, advanced users
+can customize runtime behaviors by passing it to `equation_search`.
+
+# See Also
+
+- [`RuntimeOptions`](@ref): Default implementation used by `equation_search`.
+- [`equation_search`](@ref SymbolicRegression.equation_search): Main function to perform symbolic regression.
+- [`AbstractOptions`](@ref SymbolicRegression.CoreModule.OptionsStruct.AbstractOptions): See how to extend abstract types for customizing options.
+
+"""
+abstract type AbstractRuntimeOptions end
+
+"""
+    RuntimeOptions{PARALLELISM,DIM_OUT,RETURN_STATE,LOGGER,EXTERNAL_STOP} <: AbstractRuntimeOptions
+
+Parameters for a search that are passed to `equation_search` directly,
+rather than set within `Options`. This is to differentiate between
+parameters that relate to processing and the duration of the search,
+and parameters dealing with the search hyperparameters itself.
+"""
+struct RuntimeOptions{PARALLELISM,DIM_OUT,RETURN_STATE,LOGGER,EXTERNAL_STOP} <:
+       AbstractRuntimeOptions
+    niterations::Int64
+    numprocs::Int64
+    init_procs::Union{Vector{Int},Nothing}
+    addprocs_function::Function
+    worker_timeout::Float64
+    exeflags::Cmd
+    worker_imports::Union{Vector{Symbol},Nothing}
+    runtests::Bool
+    verbosity::Int64
+    progress::Bool
+    logger::Union{AbstractLogger,Nothing}
+    external_stop::EXTERNAL_STOP
+    parallelism::Val{PARALLELISM}
+    dim_out::Val{DIM_OUT}
+    return_state::Val{RETURN_STATE}
+    run_id::String
+end
+@unstable @inline function Base.getproperty(
+    roptions::RuntimeOptions{P,D,R}, name::Symbol
+) where {P,D,R}
+    if name == :parallelism
+        return P
+    elseif name == :dim_out
+        return D
+    elseif name == :return_state
+        return R
+    else
+        getfield(roptions, name)
+    end
+end
+function Base.propertynames(roptions::RuntimeOptions)
+    return (Base.fieldnames(typeof(roptions))..., :parallelism, :dim_out, :return_state)
+end
+
+@unstable function RuntimeOptions(;
+    niterations::Int=10,
+    nout::Int=1,
+    parallelism=:multithreading,
+    numprocs::Union{Int,Nothing}=nothing,
+    procs::Union{Vector{Int},Nothing}=nothing,
+    addprocs_function::Union{Function,Nothing}=nothing,
+    heap_size_hint_in_bytes::Union{Integer,Nothing}=nothing,
+    worker_timeout::Union{Real,Nothing}=nothing,
+    worker_imports::Union{Vector{Symbol},Nothing}=nothing,
+    runtests::Bool=true,
+    return_state::VRS=nothing,
+    run_id::Union{String,Nothing}=nothing,
+    verbosity::Union{Int,Nothing}=nothing,
+    progress::Union{Bool,Nothing}=nothing,
+    v_dim_out::Val{DIM_OUT}=Val(nothing),
+    logger=nothing,
+    external_stop=nothing,
+    # Defined from options
+    options_return_state::Val{ORS}=Val(nothing),
+    options_verbosity::Union{Integer,Nothing}=nothing,
+    options_progress::Union{Bool,Nothing}=nothing,
+) where {DIM_OUT,ORS,VRS<:Union{Bool,Nothing,Val}}
+    concurrency = if parallelism in (:multithreading, "multithreading")
+        :multithreading
+    elseif parallelism in (:multiprocessing, "multiprocessing")
+        :multiprocessing
+    elseif parallelism in (:serial, "serial")
+        :serial
+    else
+        error(
+            "Invalid parallelism mode: $parallelism. " *
+            "You must choose one of :multithreading, :multiprocessing, or :serial.",
+        )
+        :serial
+    end
+    if concurrency in (:multithreading, :serial)
+        !isnothing(numprocs) && error(
+            "`numprocs` should not be set when using `parallelism=$(parallelism)`. Please use `:multiprocessing`.",
+        )
+        !isnothing(procs) && error(
+            "`procs` should not be set when using `parallelism=$(parallelism)`. Please use `:multiprocessing`.",
+        )
+    end
+    !isnothing(verbosity) &&
+        !isnothing(options_verbosity) &&
+        error(
+            "You cannot set `verbosity` in both the search parameters " *
+            "`AbstractOptions` and the call to `equation_search`.",
+        )
+    !isnothing(progress) &&
+        !isnothing(options_progress) &&
+        error(
+            "You cannot set `progress` in both the search parameters " *
+            "`AbstractOptions` and the call to `equation_search`.",
+        )
+    !isnothing(ORS) &&
+        !isnothing(return_state) &&
+        error(
+            "You cannot set `return_state` in both the `AbstractOptions` and in the passed arguments.",
+        )
+
+    _numprocs::Int = if isnothing(numprocs)
+        if isnothing(procs)
+            4
+        else
+            length(procs)
+        end
+    else
+        if isnothing(procs)
+            numprocs
+        else
+            @assert length(procs) == numprocs
+            numprocs
+        end
+    end
+
+    _return_state = VRS <: Val ? first(VRS.parameters) : something(ORS, return_state, false)
+    dim_out = something(DIM_OUT, nout > 1 ? 2 : 1)
+    _verbosity = something(verbosity, options_verbosity, 1)
+    _progress = something(progress, options_progress, (_verbosity > 0) && nout == 1)
+    _addprocs_function = something(addprocs_function, addprocs)
+    _worker_timeout = Float64(
+        something(
+            worker_timeout,
+            tryparse(Float64, get(ENV, "JULIA_WORKER_TIMEOUT", "")),
+            max(60, _numprocs^2),
+        ),
+    )
+    _run_id = @something(run_id, generate_run_id())
+
+    exeflags = if concurrency == :multiprocessing && isnothing(procs)
+        heap_size_hint_in_megabytes = floor(
+            Int,
+            (@something(heap_size_hint_in_bytes, (Sys.free_memory() / _numprocs))) / 1024^2,
+        )
+        _verbosity > 0 &&
+            isnothing(heap_size_hint_in_bytes) &&
+            @info "Automatically setting `--heap-size-hint=$(heap_size_hint_in_megabytes)M` on each Julia process. You can configure this with the `heap_size_hint_in_bytes` parameter."
+
+        `--heap-size=$(heap_size_hint_in_megabytes)M`
+    else
+        ``
+    end
+
+    return RuntimeOptions{
+        concurrency,dim_out,_return_state,typeof(logger),typeof(external_stop)
+    }(
+        niterations,
+        _numprocs,
+        procs,
+        _addprocs_function,
+        _worker_timeout,
+        exeflags,
+        worker_imports,
+        runtests,
+        _verbosity,
+        _progress,
+        logger,
+        external_stop,
+        Val(concurrency),
+        Val(dim_out),
+        Val(_return_state),
+        _run_id,
+    )
+end
+
+function generate_run_id()
+    date_str = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
+    h = join(rand(['0':'9'; 'a':'z'; 'A':'Z'], 6))
+    return "$(date_str)_$h"
+end
+
+"""A simple dictionary to track worker allocations."""
+const WorkerAssignments = Dict{Tuple{Int,Int},Int}
+
+function next_worker(worker_assignment::WorkerAssignments, procs::Vector{Int})::Int
     job_counts = Dict(proc => 0 for proc in procs)
     for (key, value) in worker_assignment
         @assert haskey(job_counts, value)
@@ -26,24 +289,106 @@ function next_worker(worker_assignment::Dict{Tuple{Int,Int},Int}, procs::Vector{
     return least_busy_worker
 end
 
-function next_worker(worker_assignment::Dict{Tuple{Int,Int},Int}, procs::Nothing)::Int
-    return 0
+function assign_next_worker!(
+    worker_assignment::WorkerAssignments; pop, out, parallelism, procs
+)::Int
+    if parallelism == :multiprocessing
+        worker_idx = next_worker(worker_assignment, procs)
+        worker_assignment[(out, pop)] = worker_idx
+        return worker_idx
+    else
+        return 0
+    end
 end
 
-macro sr_spawner(parallel, p, expr)
-    quote
-        if $(esc(parallel)) == :serial
-            $(esc(expr))
-        elseif $(esc(parallel)) == :multiprocessing
-            @spawnat($(esc(p)), $(esc(expr)))
-        elseif $(esc(parallel)) == :multithreading
-            Threads.@spawn($(esc(expr)))
+const DefaultWorkerOutputType{P,H,TR<:MaybeTrace,S<:Tuple} = Tuple{P,H,TR,Float64,S}
+
+function get_worker_output_type(
+    ::Val{PARALLELISM},
+    ::Type{PopType},
+    ::Type{HallOfFameType},
+    ::Type{TraceStateType},
+    ::Type{PluginStatesType},
+) where {
+    PARALLELISM,PopType,HallOfFameType,TraceStateType<:MaybeTrace,PluginStatesType<:Tuple
+}
+    if PARALLELISM == :serial
+        DefaultWorkerOutputType{PopType,HallOfFameType,TraceStateType,PluginStatesType}
+    elseif PARALLELISM == :multiprocessing
+        Future
+    else
+        Task
+    end
+end
+
+#! format: off
+extract_from_worker(p::DefaultWorkerOutputType, _, _, _, _) = p
+extract_from_worker(f::Future, ::Type{P}, ::Type{H}, ::Type{TR}, ::Type{S}) where {P,H,TR<:MaybeTrace,S<:Tuple} = fetch(f)::DefaultWorkerOutputType{P,H,TR,S}
+extract_from_worker(t::Task, ::Type{P}, ::Type{H}, ::Type{TR}, ::Type{S}) where {P,H,TR<:MaybeTrace,S<:Tuple} = fetch(t)::DefaultWorkerOutputType{P,H,TR,S}
+#! format: on
+
+macro sr_spawner(expr, kws...)
+    # Extract parallelism and worker_idx parameters from kws
+    @assert length(kws) == 2
+    @assert all(ex -> ex.head == :(=), kws)
+    @assert any(ex -> ex.args[1] == :parallelism, kws)
+    @assert any(ex -> ex.args[1] == :worker_idx, kws)
+    parallelism = kws[findfirst(ex -> ex.args[1] == :parallelism, kws)::Int].args[2]
+    worker_idx = kws[findfirst(ex -> ex.args[1] == :worker_idx, kws)::Int].args[2]
+    return quote
+        if $(parallelism) == :serial
+            $(expr)
+        elseif $(parallelism) == :multiprocessing
+            $(Distributed).@spawnat($(worker_idx), $(expr))
+        elseif $(parallelism) == :multithreading
+            $(Threads).@spawn($(expr))
         else
-            error("Invalid parallel type.")
+            error("Invalid parallel type ", string($(parallelism)), ".")
+        end
+    end |> esc
+end
+
+function init_dummy_pops(
+    npops::Int, datasets::Vector{D}, options::AbstractOptions
+) where {T,L,D<:Dataset{T,L}}
+    prototype = _population_without_plugins(
+        first(datasets); options, nfeatures=max_features(first(datasets), options)
+    )
+    return [
+        typeof(prototype)[
+            if i == 1 && j == 1
+                prototype
+            else
+                _population_without_plugins(
+                    datasets[j]; options, nfeatures=max_features(datasets[j], options)
+                )
+            end for i in 1:npops
+        ] for j in eachindex(datasets)
+    ]
+end
+
+mutable struct StdinReader{S<:IO}
+    const can_read_user_input::Bool
+    const stream::S
+    saw_quit_char::Bool
+end
+function StdinReader(can_read_user_input::Bool, stream::IO)
+    return StdinReader(can_read_user_input, stream, false)
+end
+
+function read_available_nonblocking(stream::IO)::Vector{UInt8}
+    try
+        return readavailable(stream)
+    catch err
+        if err isa Base.IOError || err isa EOFError
+            return UInt8[]
+        else
+            rethrow(err)
         end
     end
 end
 
+<<<<<<< HEAD
 function init_dummy_pops(
     nout::Int, npops::Int, datasets::Vector{AD}, options::Options
 )::Vector{Vector{Population{T,L}}} where {T,L,AD<:AbstractDataset{T,L}}
@@ -54,11 +399,36 @@ function init_dummy_pops(
             ) for i in 1:npops
         ] for j in 1:nout
     ]
+=======
+function read_available_nonblocking(stream::Base.LibuvStream)::Vector{UInt8}
+    Base.iolock_begin()
+    try
+        return take!(stream.buffer)
+    finally
+        Base.iolock_end()
+    end
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 end
 
-struct StdinReader{ST}
-    can_read_user_input::Bool
-    stream::ST
+function parse_quit_signal(data::AbstractVector{UInt8}, saw_quit_char::Bool)
+    control_c = 0x03
+    quit = 0x71
+    carriage_return = 0x0d
+    newline = 0x0a
+    for c in data
+        if c == control_c
+            return true, false
+        elseif c == quit
+            saw_quit_char = true
+        elseif c == carriage_return || c == newline
+            if saw_quit_char
+                return true, false
+            end
+        else
+            saw_quit_char = false
+        end
+    end
+    return false, saw_quit_char
 end
 
 """Start watching stream (like stdin) for user input."""
@@ -67,11 +437,7 @@ function watch_stream(stream)
 
     can_read_user_input && try
         Base.start_reading(stream)
-        bytes = bytesavailable(stream)
-        if bytes > 0
-            # Clear out initial data
-            read(stream, bytes)
-        end
+        read_available_nonblocking(stream)
     catch err
         if isa(err, MethodError)
             can_read_user_input = false
@@ -81,6 +447,7 @@ function watch_stream(stream)
     end
     return StdinReader(can_read_user_input, stream)
 end
+precompile(Tuple{typeof(watch_stream),Base.TTY})
 
 """Close the stdin reader and stop reading."""
 function close_reader!(reader::StdinReader)
@@ -92,163 +459,281 @@ end
 """Check if the user typed 'q' and <enter> or <ctl-c>."""
 function check_for_user_quit(reader::StdinReader)::Bool
     if reader.can_read_user_input
-        bytes = bytesavailable(reader.stream)
-        if bytes > 0
-            # Read:
-            data = read(reader.stream, bytes)
-            control_c = 0x03
-            quit = 0x71
-            if length(data) > 1 && (data[end] == control_c || data[end - 1] == quit)
-                return true
-            end
-        end
+        data = read_available_nonblocking(reader.stream)
+        quit, reader.saw_quit_char = parse_quit_signal(data, reader.saw_quit_char)
+        return quit
     end
     return false
 end
 
-function check_for_loss_threshold(
-    hallOfFame::AbstractVector{H}, options::Options
-)::Bool where {T,L,H<:HallOfFame{T,L}}
-    options.early_stop_condition === nothing && return false
-
-    # Check if all nout are below stopping condition.
-    for hof in hallOfFame
-        stop_conditions = [
-            exists &&
-            options.early_stop_condition(member.loss, compute_complexity(member, options))
-            for (exists, member) in zip(hof.exists, hof.members)
-        ]
-        if any(stop_conditions)
-            # This means some expressions hit the stop condition.
-        else
-            return false
-        end
-    end
-    return true
+function check_for_loss_threshold(halls_of_fame, options::AbstractOptions)::Bool
+    return _check_for_loss_threshold(halls_of_fame, options.early_stop_condition, options)
 end
 
-function check_for_timeout(start_time::Float64, options::Options)::Bool
+function _check_for_loss_threshold(_, ::Nothing, ::AbstractOptions)
+    return false
+end
+function _check_for_loss_threshold(halls_of_fame, f::F, options::AbstractOptions) where {F}
+    return all(halls_of_fame) do hof
+        any(hof.members[hof.exists]) do member
+            return f(member.loss, compute_complexity(member, options))::Bool
+        end
+    end
+end
+
+function check_for_timeout(start_time::Float64, options::AbstractOptions)::Bool
     return options.timeout_in_seconds !== nothing &&
-           time() - start_time > options.timeout_in_seconds
+           time() - start_time > options.timeout_in_seconds::Float64
 end
 
-function check_max_evals(num_evals, options::Options)::Bool
-    return options.max_evals !== nothing && options.max_evals <= sum(sum, num_evals)
+function check_max_evals(num_evals, options::AbstractOptions)::Bool
+    return options.max_evals !== nothing && options.max_evals::Int <= sum(sum, num_evals)
 end
 
-const TIME_TYPE = Float64
+# POSIX file descriptors are `int`; Windows `SOCKET`s are pointer-sized handles.
+const StopFD = @static Sys.iswindows() ? UInt : Cint
 
-"""This struct is used to monitor resources."""
-Base.@kwdef mutable struct ResourceMonitor
-    """The time the search started."""
-    absolute_start_time::TIME_TYPE = time()
-    """The time the head worker started doing work."""
-    start_work::TIME_TYPE = Inf
-    """The time the head worker finished doing work."""
-    stop_work::TIME_TYPE = Inf
+# POLLRDNORM on Windows, POLLIN elsewhere.
+const STOP_POLL_READ = @static Sys.iswindows() ? Cshort(0x0100) : Cshort(0x0001)
 
-    num_starts::UInt = 0
-    num_stops::UInt = 0
-    work_intervals::Vector{TIME_TYPE} = TIME_TYPE[]
-    rest_intervals::Vector{TIME_TYPE} = TIME_TYPE[]
-
-    """Number of intervals to store."""
-    num_intervals_to_store::Int
+struct PollFD
+    fd::StopFD
+    events::Cshort
+    revents::Cshort
 end
 
-function start_work_monitor!(monitor::ResourceMonitor)
-    monitor.start_work = time()
-    monitor.num_starts += 1
-    if monitor.num_stops > 0
-        push!(monitor.rest_intervals, monitor.start_work - monitor.stop_work)
-        if length(monitor.rest_intervals) > monitor.num_intervals_to_store
-            popfirst!(monitor.rest_intervals)
+@static if Sys.iswindows()
+    poll_stop_fd(pfd::Base.RefValue{PollFD}) = ccall(
+        (:WSAPoll, "ws2_32"), stdcall, Cint, (Ref{PollFD}, Culong, Cint), pfd, 1, 0
+    )
+    read_stop_byte(fd::StopFD, buf::Base.RefValue{UInt8}) = ccall(
+        (:recv, "ws2_32"), stdcall, Cint, (StopFD, Ref{UInt8}, Cint, Cint), fd, buf, 1, 0
+    )
+else
+    poll_stop_fd(pfd::Base.RefValue{PollFD}) = ccall(
+        :poll, Cint, (Ref{PollFD}, Cuint, Cint), pfd, 1, 0
+    )
+    read_stop_byte(fd::StopFD, buf::Base.RefValue{UInt8}) = ccall(
+        :read, Cssize_t, (Cint, Ref{UInt8}, Csize_t), fd, buf, 1
+    )
+end
+
+"""
+    ExternalStop(fd::Integer=-1, trigger::Integer=0)
+
+A per-search request for a graceful stop at the next cycle boundary. Setting
+`requested[]` directly requests a stop. A nonnegative `fd` is polled and drained;
+only `trigger` bytes request a stop, unless the trigger is zero. `fd` is a file
+descriptor on POSIX systems and a Winsock `SOCKET` on Windows, which can poll
+sockets only.
+"""
+struct ExternalStop
+    requested::Threads.Atomic{Bool}
+    fd::Int
+    trigger::UInt8
+    poll_fd::Base.RefValue{PollFD}
+    read_buf::Base.RefValue{UInt8}
+    last_poll_ns::Base.RefValue{UInt64}
+end
+
+function ExternalStop(fd::Integer=-1, trigger::Integer=0)
+    return ExternalStop(
+        Threads.Atomic{Bool}(false),
+        Int(fd),
+        UInt8(trigger),
+        Ref(PollFD(StopFD(0), STOP_POLL_READ, Cshort(0))),
+        Ref(UInt8(0)),
+        Ref(UInt64(0)),
+    )
+end
+
+function check_stop_fd(stop::ExternalStop)::Bool
+    stop.fd < 0 && return false
+    fd = StopFD(stop.fd)
+    requested = false
+    # Drain everything queued so stale bytes never stop a later search.
+    while true
+        stop.poll_fd[] = PollFD(fd, STOP_POLL_READ, Cshort(0))
+        poll_stop_fd(stop.poll_fd) == 1 || break
+        # A nonblocking descriptor may be drained between poll and read.
+        read_stop_byte(fd, stop.read_buf) == 1 || break
+        if stop.trigger == 0x00 || stop.read_buf[] == stop.trigger
+            requested = true
         end
     end
+    return requested
+end
+
+# Minimum interval between `poll` syscalls: the scheduler loop can spin
+# thousands of times per second, and each zero-timeout poll costs ~10us.
+const STOP_POLL_INTERVAL_NS = UInt64(20_000_000)  # 20 ms
+
+"""Return the `ExternalStop` for a runtime-options object, or `nothing`.
+
+Custom `AbstractRuntimeOptions` subtypes without external-stop support get a
+no-stop default; override this method to opt in.
+"""
+@inline external_stop(::AbstractRuntimeOptions) = nothing
+@inline external_stop(ropt::RuntimeOptions) = ropt.external_stop
+
+@inline check_external_stop(::Nothing)::Bool = false
+@inline check_external_stop(ropt::AbstractRuntimeOptions)::Bool = check_external_stop(
+    external_stop(ropt)
+)
+
+"""Check for an external stop request and latch matching pipe notifications."""
+function check_external_stop(stop::ExternalStop)::Bool
+    if stop.fd >= 0
+        now = time_ns()
+        if now - stop.last_poll_ns[] >= STOP_POLL_INTERVAL_NS
+            stop.last_poll_ns[] = now
+            # Keep draining even once latched so notifications arriving after
+            # the first stop cannot remain queued on the owned descriptor.
+            if check_stop_fd(stop)
+                stop.requested[] = true
+            end
+        end
+    end
+    return stop.requested[]
+end
+
+@inline latch_external_stop!(::Nothing)::Bool = false
+@inline latch_external_stop!(ropt::AbstractRuntimeOptions)::Bool = latch_external_stop!(
+    external_stop(ropt)
+)
+function latch_external_stop!(stop::ExternalStop)::Bool
+    stop.last_poll_ns[] = time_ns()
+    if check_stop_fd(stop)
+        stop.requested[] = true
+    end
+    return stop.requested[]
+end
+
+"""Consume stop notifications queued on the descriptor without latching a stop.
+
+Called at the end of teardown: notifications arriving after the search loop's
+final poll (e.g. while waiting on in-flight workers) belong to the finished
+search and must not stop a later search sharing the descriptor. Notifications
+arriving after teardown are preserved for the next search.
+"""
+@inline drain_external_stop!(::Nothing) = nothing
+@inline drain_external_stop!(ropt::AbstractRuntimeOptions) = drain_external_stop!(
+    external_stop(ropt)
+)
+function drain_external_stop!(stop::ExternalStop)
+    check_stop_fd(stop)
     return nothing
 end
 
-function stop_work_monitor!(monitor::ResourceMonitor)
-    monitor.stop_work = time()
-    push!(monitor.work_intervals, monitor.stop_work - monitor.start_work)
-    monitor.num_stops += 1
-    @assert monitor.num_stops == monitor.num_starts
-    if length(monitor.work_intervals) > monitor.num_intervals_to_store
-        popfirst!(monitor.work_intervals)
+"""
+This struct is used to monitor resources.
+
+Whenever we check a channel, we record if it was empty or not.
+This gives us a measure for how much of a bottleneck there is
+at the head worker.
+"""
+Base.@kwdef mutable struct ResourceMonitor
+    population_ready::Vector{Bool} = Bool[]
+    max_recordings::Int
+    start_reporting_at::Int
+    window_size::Int
+end
+
+function record_channel_state!(monitor::ResourceMonitor, state)
+    push!(monitor.population_ready, state)
+    if length(monitor.population_ready) > monitor.max_recordings
+        popfirst!(monitor.population_ready)
     end
     return nothing
 end
 
 function estimate_work_fraction(monitor::ResourceMonitor)::Float64
-    if monitor.num_stops <= 1
+    if length(monitor.population_ready) <= monitor.start_reporting_at
         return 0.0  # Can't estimate from only one interval, due to JIT.
     end
-    work_intervals = monitor.work_intervals
-    rest_intervals = monitor.rest_intervals
-    # Trim 1st, in case we are still in the first interval.
-    if monitor.num_stops <= monitor.num_intervals_to_store + 1
-        work_intervals = work_intervals[2:end]
-        rest_intervals = rest_intervals[2:end]
-    end
-    return mean(work_intervals) / (mean(work_intervals) + mean(rest_intervals))
+    return mean(monitor.population_ready[(end - (monitor.window_size - 1)):end])
 end
 
 function get_load_string(; head_node_occupation::Float64, parallelism=:serial)
-    parallelism == :serial && return ""
-    out = @sprintf("Head worker occupation: %.1f%%", head_node_occupation * 100)
-
-    raise_usage_warning = head_node_occupation > 0.2
-    if raise_usage_warning
-        out *= "."
-        out *= " This is high, and will prevent efficient resource usage."
-        out *= " Increase `ncyclesperiteration` to reduce load on head worker."
+    if parallelism == :serial || head_node_occupation == 0.0
+        return ""
     end
+    return ""
+    ## TODO: Debug why populations are always ready
+    # out = @sprintf("Head worker occupation: %.1f%%", head_node_occupation * 100)
 
-    out *= "\n"
-    return out
+    # raise_usage_warning = head_node_occupation > 0.4
+    # if raise_usage_warning
+    #     out *= "."
+    #     out *= " This is high, and will prevent efficient resource usage."
+    #     out *= " Increase `ncycles_per_iteration` to reduce load on head worker."
+    # end
+
+    # out *= "\n"
+    # return out
 end
 
 function update_progress_bar!(
     progress_bar::WrappedProgressBar,
+    iterations_elapsed::Int,
     hall_of_fame::HallOfFame{T,L},
+<<<<<<< HEAD
     dataset::AbstractDataset{T,L},
     options::Options,
+=======
+    dataset::Dataset{T,L},
+    options::AbstractOptions,
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     equation_speed::Vector{Float32},
     head_node_occupation::Float64,
     parallelism=:serial,
 ) where {T,L}
-    equation_strings = string_dominating_pareto_curve(
-        hall_of_fame, dataset, options; width=progress_bar.bar.width
-    )
     # TODO - include command about "q" here.
     load_string = if length(equation_speed) > 0
         average_speed = sum(equation_speed) / length(equation_speed)
         @sprintf(
-            "Expressions evaluated per second: %-5.2e. ",
+            "Full dataset evaluations per second: %-5.2e. ",
             round(average_speed, sigdigits=3)
         )
     else
-        @sprintf("Expressions evaluated per second: [.....]. ")
+        @sprintf("Full dataset evaluations per second: [.....]. ")
     end
     load_string *= get_load_string(; head_node_occupation, parallelism)
-    load_string *= @sprintf("Press 'q' and then <enter> to stop execution early.\n")
-    equation_strings = load_string * equation_strings
-    set_multiline_postfix!(progress_bar, equation_strings)
-    manually_iterate!(progress_bar)
+    if options.input_stream != devnull
+        load_string *= @sprintf("Press 'q' and then <enter> to stop execution early.")
+    end
+    equation_strings = string_dominating_pareto_curve(
+        hall_of_fame, dataset, options; width=barlen(progress_bar)
+    )
+    progress_bar.postfix = [
+        (styled"{italic:Info}", styled"{italic:$load_string}"),
+        (styled"{italic:Hall of Fame}", equation_strings),
+    ]
+    manually_iterate!(progress_bar, iterations_elapsed)
     return nothing
 end
 
 function print_search_state(
+<<<<<<< HEAD
     hall_of_fames::Vector{H},
     datasets::Vector{AD};
     options::Options,
+=======
+    hall_of_fames,
+    datasets;
+    options::AbstractOptions,
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     equation_speed::Vector{Float32},
     total_cycles::Int,
     cycles_remaining::Vector{Int},
     head_node_occupation::Float64,
     parallelism=:serial,
     width::Union{Integer,Nothing}=nothing,
+<<<<<<< HEAD
 ) where {T,L,AD<:AbstractDataset{T,L},H<:HallOfFame{T,L}}
+=======
+)
+>>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     twidth = (width === nothing) ? 100 : max(100, width::Integer)
     nout = length(datasets)
     average_speed = sum(equation_speed) / length(equation_speed)
@@ -258,14 +743,16 @@ function print_search_state(
     load_string = get_load_string(; head_node_occupation, parallelism)
     print(load_string)
     cycles_elapsed = total_cycles * nout - sum(cycles_remaining)
+    iterations_elapsed = cycles_elapsed ÷ options.populations
+    total_iterations = (total_cycles * nout) ÷ options.populations
     @printf(
         "Progress: %d / %d total iterations (%.3f%%)\n",
-        cycles_elapsed,
-        total_cycles * nout,
-        100.0 * cycles_elapsed / total_cycles / nout
+        iterations_elapsed,
+        total_iterations,
+        100.0 * cycles_elapsed / (total_cycles * nout)
     )
 
-    print("="^twidth * "\n")
+    print("═"^twidth * "\n")
     for (j, (hall_of_fame, dataset)) in enumerate(zip(hall_of_fames, datasets))
         if nout > 1
             @printf("Best equations for output %d\n", j)
@@ -274,44 +761,329 @@ function print_search_state(
             hall_of_fame, dataset, options; width=width
         )
         print(equation_strings * "\n")
-        print("="^twidth * "\n")
+        print("═"^twidth * "\n")
     end
-    return print("Press 'q' and then <enter> to stop execution early.\n")
+    if options.input_stream != devnull
+        print("Press 'q' and then <enter> to stop execution early.\n")
+    end
+    return nothing
 end
 
-const StateType{T,L} = Tuple{
-    Union{Vector{Vector{Population{T,L}}},Matrix{Population{T,L}}},
-    Union{HallOfFame{T,L},Vector{HallOfFame{T,L}}},
-}
-
-function load_saved_hall_of_fame(
-    saved_state::StateType{T,L}
-)::Vector{HallOfFame{T,L}} where {T,L}
+function load_saved_hall_of_fame(saved_state)
     hall_of_fame = saved_state[2]
-    if !isa(hall_of_fame, Vector{HallOfFame{T,L}})
-        hall_of_fame = [hall_of_fame]
+    hall_of_fame = if isa(hall_of_fame, HallOfFame)
+        [hall_of_fame]
+    else
+        hall_of_fame
     end
-    return [copy_hall_of_fame(hof) for hof in hall_of_fame]
+    return [copy(hof) for hof in hall_of_fame]
 end
 load_saved_hall_of_fame(::Nothing)::Nothing = nothing
 
 function get_population(
-    pops::Vector{Vector{Population{T,L}}}; out::Int, pop::Int
-)::Population{T,L} where {T,L}
+    pops::Vector{Vector{P}}; out::Int, pop::Int
+)::P where {P<:Population}
     return pops[out][pop]
 end
-function get_population(
-    pops::Matrix{Population{T,L}}; out::Int, pop::Int
-)::Population{T,L} where {T,L}
+function get_population(pops::Matrix{P}; out::Int, pop::Int)::P where {P<:Population}
     return pops[out, pop]
 end
-function load_saved_population(
-    saved_state::StateType{T,L}; out::Int, pop::Int
-)::Population{T,L} where {T,L}
+function load_saved_population(saved_state; out::Int, pop::Int)
     saved_pop = get_population(saved_state[1]; out=out, pop=pop)
-    return copy_population(saved_pop)
+    return copy(saved_pop)
+end
+load_saved_population(::Nothing; kws...) = nothing
+
+"""
+    AbstractSearchState{T,L,N}
+
+An abstract type encapsulating the internal state of the search process during symbolic regression.
+
+`AbstractSearchState` instances hold information like populations and progress metrics,
+used internally by `equation_search`. Subtyping `AbstractSearchState` allows
+customization of search state management.
+
+Look through the source of `equation_search` to see how this is used.
+
+# See Also
+
+- [`SearchState`](@ref): Default implementation of `AbstractSearchState`.
+- [`equation_search`](@ref SymbolicRegression.equation_search): Function where `AbstractSearchState` is utilized.
+- [`AbstractOptions`](@ref SymbolicRegression.CoreModule.OptionsStruct.AbstractOptions): See how to extend abstract types for customizing options.
+
+"""
+abstract type AbstractSearchState{T,L,N<:AbstractExpression{T}} end
+
+"""
+    SearchState{T,L,N,PM,WorkerOutputType,ChannelType,TraceStateType,PluginStatesType,WorkerPluginStatesType} <: AbstractSearchState{T,L,N}
+
+The state of the search, including the populations, worker outputs, tasks, and
+channels. This is used to manage the search and keep track of runtime variables
+in a single struct.
+"""
+Base.@kwdef struct SearchState{
+    T,
+    L,
+    N<:AbstractExpression{T},
+    PM<:AbstractPopMember{T,L,N},
+    WorkerOutputType,
+    ChannelType,
+    TraceStateType<:MaybeTrace,
+    PluginStatesType<:Tuple,
+    WorkerPluginStatesType<:Tuple,
+} <: AbstractSearchState{T,L,N}
+    procs::Vector{Int}
+    we_created_procs::Bool
+    worker_output::Vector{Vector{WorkerOutputType}}
+    tasks::Vector{Vector{Task}}
+    channels::Vector{Vector{ChannelType}}
+    worker_assignment::WorkerAssignments
+    task_order::Vector{Tuple{Int,Int}}
+    halls_of_fame::Vector{HallOfFame{T,L,N,PM}}
+    last_pops::Vector{Vector{Population{T,L,N,PM}}}
+    best_sub_pops::Vector{Vector{Population{T,L,N,PM}}}
+    num_evals::Vector{Vector{Float64}}
+    cycles_remaining::Vector{Int}
+    cur_maxsizes::Vector{Int}
+    stdin_reader::StdinReader
+    trace_prototype::TraceStateType
+    seed_members::Vector{Vector{PM}}
+    plugin_states::Vector{PluginStatesType}
+    worker_plugin_states::Vector{Vector{WorkerPluginStatesType}}
 end
 
-load_saved_population(::Nothing; kws...) = nothing
+function save_to_file(
+    dominating,
+    nout::Integer,
+    j::Integer,
+    dataset::Dataset{T,L},
+    options::AbstractOptions,
+    ropt::AbstractRuntimeOptions,
+) where {T,L}
+    output_directory = joinpath(something(options.output_directory, "outputs"), ropt.run_id)
+    mkpath(output_directory)
+    filename = nout > 1 ? "hall_of_fame_output$(j).csv" : "hall_of_fame.csv"
+    output_file = joinpath(output_directory, filename)
+
+    dominating_n = length(dominating)
+
+    complexities = Vector{Int}(undef, dominating_n)
+    losses = Vector{L}(undef, dominating_n)
+    strings = Vector{String}(undef, dominating_n)
+
+    for i in 1:dominating_n
+        member = dominating[i]
+        complexities[i] = compute_complexity(member, options)
+        losses[i] = member.loss
+        strings[i] = string_tree(
+            member.tree, options; variable_names=dataset.variable_names, pretty=false
+        )
+    end
+
+    s = let
+        tmp_io = IOBuffer()
+
+        println(tmp_io, "Complexity,Loss,Equation")
+        for i in 1:dominating_n
+            println(
+                tmp_io,
+                "$(complexities[i]),$(losses[i]),\"$(replace(strings[i], '"' => "\"\""))\"",
+            )
+        end
+
+        String(take!(tmp_io))
+    end
+
+    # Write file twice in case exit in middle of filewrite
+    for out_file in (output_file, output_file * ".bak")
+        open(Base.Fix2(write, s), out_file, "w")
+    end
+    return nothing
+end
+
+"""
+    get_cur_maxsize(; options, total_cycles, cycles_remaining)
+
+For searches where the maxsize gradually increases, this function returns the
+current maxsize.
+"""
+function get_cur_maxsize(;
+    options::AbstractOptions, total_cycles::Int, cycles_remaining::Int
+)
+    cycles_elapsed = total_cycles - cycles_remaining
+    fraction_elapsed = 1.0f0 * cycles_elapsed / total_cycles
+    in_warmup_period = fraction_elapsed <= options.warmup_maxsize_by
+
+    if options.warmup_maxsize_by > 0 && in_warmup_period
+        return 3 + floor(
+            Int, (options.maxsize - 3) * fraction_elapsed / options.warmup_maxsize_by
+        )
+    else
+        return options.maxsize
+    end
+end
+
+function construct_datasets(
+    X,
+    y,
+    weights,
+    variable_names,
+    display_variable_names,
+    y_variable_names,
+    X_units,
+    y_units,
+    extra,
+    ::Type{L},
+) where {L}
+    nout = size(y, 1)
+    return [
+        Dataset(
+            X,
+            y[j, :],
+            L;
+            index=j,
+            weights=(weights === nothing ? weights : weights[j, :]),
+            variable_names=variable_names,
+            display_variable_names=display_variable_names,
+            y_variable_name=if y_variable_names === nothing
+                if nout > 1
+                    "y$(subscriptify(j))"
+                else
+                    if variable_names === nothing || "y" ∉ variable_names
+                        "y"
+                    else
+                        "target"
+                    end
+                end
+            elseif isa(y_variable_names, AbstractVector)
+                y_variable_names[j]
+            else
+                y_variable_names
+            end,
+            X_units=X_units,
+            y_units=isa(y_units, AbstractVector) ? y_units[j] : y_units,
+            extra=extra,
+        ) for j in 1:nout
+    ]
+end
+
+function _parse_guess_expression(
+    ::Type{T}, g::AbstractExpression, ::Dataset, ::AbstractOptions
+) where {T}
+    return copy(g)
+end
+
+@unstable function _parse_guess_expression(
+    ::Type{T}, g::NamedTuple, dataset::Dataset, options::AbstractOptions
+) where {T}
+    # Check if any expression in the NamedTuple uses actual variable names instead of placeholder syntax
+    function_keys = keys(options.expression_options.structure.num_features)
+    for (key, expr_str) in pairs(g)
+        key in function_keys || continue
+        expr_str isa AbstractString || continue
+        for var_name in dataset.variable_names
+            if occursin(Regex("\\b\\Q$(var_name)\\E\\b"), expr_str)
+                throw(
+                    ArgumentError(
+                        "Found variable name '$(var_name)' in TemplateExpression guess. " *
+                        "Use placeholder syntax '#1', '#2', etc., (for argument 1, 2, etc.) instead of actual variable names.",
+                    ),
+                )
+            end
+        end
+    end
+
+    eval_context_kws = if takes_eval_context(options.operators)
+        (; eval_context=EvalContext(; options.turbo, options.bumper))
+    else
+        NamedTuple()
+    end
+    return parse_expression(
+        g;
+        expression_type=options.expression_type,
+        operators=options.operators,
+        variable_names=nothing,  # Don't pass dataset variable names - let custom parse_expression handle #N placeholders
+        node_type=with_type_parameters(options.node_type, T),
+        eval_module=parse_scope(T),
+        expression_options=options.expression_options,
+        eval_context_kws...,
+    )
+end
+
+@unstable function _parse_guess_expression(
+    ::Type{T}, g, dataset::Dataset, options::AbstractOptions
+) where {T}
+    return parse_expression(
+        g;
+        operators=options.operators,
+        variable_names=dataset.variable_names,
+        node_type=with_type_parameters(options.node_type, T),
+        expression_type=options.expression_type,
+        eval_module=parse_scope(T),
+    )
+end
+
+"""Parse user-provided guess expressions and convert them into optimized
+`PopMember` objects for each output dataset."""
+@unstable function parse_guesses(
+    ::Type{P},
+    guesses::Union{AbstractVector,AbstractVector{<:AbstractVector}},
+    datasets::Vector{D},
+    options::AbstractOptions,
+) where {T,L,P<:AbstractPopMember{T,L},D<:Dataset{T,L}}
+    ConcreteP = infer_popmember_type(T, L, first(datasets), options)
+    return _parse_guesses_impl(ConcreteP, guesses, datasets, options)
+end
+
+@inline function _parse_guesses_impl(
+    ::Type{P},
+    guesses::Union{AbstractVector,AbstractVector{<:AbstractVector}},
+    datasets::Vector{D},
+    options::AbstractOptions,
+) where {T,L,N,P<:AbstractPopMember{T,L,N},D<:Dataset{T,L}}
+    nout = length(datasets)
+    out = [P[] for _ in 1:nout]
+    guess_lists = _make_vector_vector(guesses, nout)
+    for j in 1:nout
+        dataset = datasets[j]
+        for g in guess_lists[j]
+            ex = _parse_guess_expression(T, g, dataset, options)
+            member = constructorof(P)(
+                dataset, ex, options; deterministic=options.deterministic
+            )
+            if options.should_optimize_constants
+                member, _ = optimize_constants(dataset, member, options)
+            end
+            member = strip_metadata(member, options, dataset)
+
+            # Check if guess expression exceeds maxsize and warn
+            complexity = compute_complexity(member.tree, options)
+            if complexity > options.maxsize
+                expr_str = string_tree(member.tree, options)
+                @warn "Guess expression '$expr_str' has complexity $complexity > maxsize ($(options.maxsize))."
+            end
+
+            push!(out[j], member)
+        end
+    end
+    return out
+end
+
+function _make_vector_vector(guesses, nout)
+    if nout == 1
+        if guesses isa AbstractVector{<:AbstractVector}
+            @assert length(guesses) == nout
+            return guesses
+        else
+            return [guesses]
+        end
+    else  # nout > 1
+        if !(guesses isa AbstractVector{<:AbstractVector})
+            throw(ArgumentError("`guesses` must be a vector of vectors when `nout > 1`"))
+        end
+        @assert length(guesses) == nout
+        return guesses
+    end
+end
 
 end

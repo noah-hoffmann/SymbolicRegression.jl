@@ -1,4 +1,16 @@
-import PrecompileTools: @compile_workload, @setup_workload
+using PrecompileTools: @compile_workload, @setup_workload
+using Preferences: @load_preference
+
+# The precompile workload can be tuned with Preferences.jl. For example, to
+# disable the Float64 precompilation, set the `precompile_float64` preference
+# to `false`:
+#
+#     using Preferences
+#     Preferences.set_preferences!(SymbolicRegression, "precompile_float64" => false)
+#
+# (Changing this requires a restart of Julia to trigger re-precompilation.)
+const PRECOMPILE_FLOAT64 = @load_preference("precompile_float64", true)
+const PRECOMPILE_TYPES = PRECOMPILE_FLOAT64 ? (Float32, Float64) : (Float32,)
 
 macro maybe_setup_workload(mode, ex)
     precompile_ex = Expr(
@@ -31,22 +43,25 @@ macro maybe_compile_workload(mode, ex)
 end
 
 """`mode=:precompile` will use `@precompile_*` directives; `mode=:compile` runs."""
-function do_precompilation(; mode=:precompile)
+function do_precompilation(::Val{mode}) where {mode}
     @maybe_setup_workload mode begin
-        types = [Float32]
-        for T in types
+        for T in PRECOMPILE_TYPES, nout in (1,)
+            start = nout == 1
+            N = 30
+            X = randn(T, 3, N)
+            y = start ? randn(T, N) : randn(T, nout, N)
             @maybe_compile_workload mode begin
-                X = randn(T, 5, 100)
-                y = 2 * cos.(X[4, :]) + X[1, :] .^ 2 .- 2
                 options = SymbolicRegression.Options(;
-                    binary_operators=[+, *, /, -],
-                    unary_operators=[cos, exp],
-                    npopulations=3,
-                    npop=50,
-                    ncycles_per_iteration=100,
-                    mutation_weights=MutationWeights(;
+                    binary_operators=[+, *, /, -, ^],
+                    unary_operators=[sin, cos, exp, log, sqrt, abs],
+                    populations=3,
+                    population_size=start ? 50 : 12,
+                    tournament_selection_n=6,
+                    ncycles_per_iteration=start ? 30 : 1,
+                    mutation_weights=(;
                         mutate_constant=1.0,
                         mutate_operator=1.0,
+                        swap_operands=1.0,
                         add_node=1.0,
                         insert_node=1.0,
                         delete_node=1.0,
@@ -61,19 +76,28 @@ function do_precompilation(; mode=:precompile)
                     optimizer_probability=0.05,
                     save_to_file=false,
                 )
-                redirect_stderr(devnull) do
-                    redirect_stdout(devnull) do
-                        hall_of_fame = EquationSearch(
-                            X,
-                            y;
-                            niterations=3,
-                            options=options,
-                            parallelism=:multithreading,
-                        )
-                        calculate_pareto_frontier(hall_of_fame)
-                    end
-                end
+                state = equation_search(
+                    X,
+                    y;
+                    niterations=start ? 3 : 1,
+                    options=options,
+                    parallelism=:multithreading,
+                    return_state=true,
+                    verbosity=0,
+                )
+                hof = equation_search(
+                    X,
+                    y;
+                    niterations=0,
+                    options=options,
+                    parallelism=:multithreading,
+                    saved_state=state,
+                    return_state=false,
+                    verbosity=0,
+                )
+                nout == 1 && calculate_pareto_frontier(hof::HallOfFame)
             end
         end
     end
+    return nothing
 end
