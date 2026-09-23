@@ -1,16 +1,5 @@
 module RegularizedEvolutionModule
 
-<<<<<<< HEAD
-import Random: shuffle!
-import DynamicExpressions: string_tree
-import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
-import ..PopMemberModule: PopMember
-import ..PopulationModule: Population, best_of_sample
-import ..AdaptiveParsimonyModule: RunningSearchStatistics
-import ..MutateModule: next_generation, crossover_generation
-import ..RecorderModule: @recorder
-import ..UtilsModule: argmin_fast
-=======
 using ..CoreModule:
     AbstractOptions,
     Dataset,
@@ -102,19 +91,12 @@ function reset!(step::MutationStep)
     reset_traced_steps!(step.traced_steps)
     return nothing
 end
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 # Pass through the population several times, replacing the oldest
 # with the fittest of a small subsample
 function reg_evol_cycle(
-<<<<<<< HEAD
-    dataset::AbstractDataset{T,L},
-    pop::Population{T,L},
-    temperature,
-=======
     dataset::Dataset{T,L},
     pop::P,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     curmaxsize::Int,
     options::AbstractOptions,
     trace::MaybeTrace;

@@ -1,12 +1,5 @@
 module HallOfFameModule
 
-<<<<<<< HEAD
-import DynamicExpressions: Node, string_tree
-import ..CoreModule: MAX_DEGREE, Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
-import ..ComplexityModule: compute_complexity
-import ..PopMemberModule: PopMember, copy_pop_member
-import ..LossFunctionsModule: eval_loss
-=======
 using StyledStrings: @styled_str
 using DynamicExpressions: AbstractExpression, string_tree
 using ..UtilsModule: split_string, AnnotatedIOBuffer, dump_buffer
@@ -16,7 +9,6 @@ using ..ComplexityModule: compute_complexity
 using ..CheckConstraintsModule: check_constraints
 using ..PopMemberModule: AbstractPopMember, PopMember
 using ..InterfaceDynamicExpressionsModule: format_dimensions, WILDCARD_UNIT_STRING
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 using Printf: @sprintf
 
 """

@@ -279,14 +279,10 @@ using .CoreModule:
     LOSS_TYPE,
     TraceType,
     Dataset,
-<<<<<<< HEAD
-    AbstractDataset,
-=======
     BasicDataset,
     use_batching,
     SubDataset,
     AbstractOptions,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     Options,
     ComplexityMapping,
     WarmStartIncompatibleError,
@@ -672,33 +668,6 @@ function equation_search(dataset::Dataset; kws...)
     return equation_search([dataset]; kws..., v_dim_out=Val(1))
 end
 
-<<<<<<< HEAD
-function EquationSearch(dataset::Dataset; kws...)
-    return EquationSearch([dataset]; kws...)
-end
-
-function EquationSearch(
-    datasets::Vector{AD};
-    niterations::Int=10,
-    options::Options=Options(),
-    parallelism=:multithreading,
-    numprocs::Union{Int,Nothing}=nothing,
-    procs::Union{Vector{Int},Nothing}=nothing,
-    addprocs_function::Union{Function,Nothing}=nothing,
-    runtests::Bool=true,
-    saved_state::Union{StateType{T,L},Nothing}=nothing,
-) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
-    concurrency = if parallelism in (:multithreading, "multithreading")
-        :multithreading
-    elseif parallelism in (:multiprocessing, "multiprocessing")
-        :multiprocessing
-    elseif parallelism in (:serial, "serial")
-        :serial
-    else
-        error(
-            "Invalid parallelism mode: $parallelism. " *
-            "You must choose one of :multithreading, :multiprocessing, or :serial.",
-=======
 function equation_search(
     datasets::Vector{D};
     options::AbstractOptions=Options(),
@@ -715,7 +684,6 @@ function equation_search(
             options_progress=options.progress,
             nout=length(datasets),
             runtime_options_kws...,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
         )
     )
 
@@ -723,23 +691,6 @@ function equation_search(
     return _equation_search(datasets, _runtime_options, options, saved_state, guesses)
 end
 
-<<<<<<< HEAD
-function _EquationSearch(
-    parallelism::Symbol,
-    datasets::Vector{AD};
-    niterations::Int,
-    options::Options,
-    numprocs::Union{Int,Nothing},
-    procs::Union{Vector{Int},Nothing},
-    addprocs_function::Union{Function,Nothing},
-    runtests::Bool,
-    saved_state::Union{StateType{T,L},Nothing},
-) where {T<:DATA_TYPE,L<:LOSS_TYPE,AD<:AbstractDataset{T,L}}
-    if options.deterministic
-        if parallelism != :serial
-            error("Determinism is only guaranteed for serial mode.")
-        end
-=======
 @noinline function _equation_search(
     datasets::Vector{D},
     ropt::AbstractRuntimeOptions,
@@ -769,7 +720,6 @@ function _validate_options(
     if ropt.progress
         @assert(nout == 1, "You cannot display a progress bar for multi-output searches.")
         @assert(ropt.verbosity > 0, "You cannot display a progress bar with `verbosity=0`.")
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     end
     if options.node_type <: GraphNode && ropt.verbosity > 0
         @warn "The `GraphNode` interface and mutation operators are experimental and will change in future versions."
@@ -778,26 +728,6 @@ function _validate_options(
         test_option_configuration(ropt.parallelism, datasets, options, ropt.verbosity)
         test_dataset_configuration(example_dataset, options, ropt.verbosity)
     end
-<<<<<<< HEAD
-
-    example_dataset = datasets[1]
-    nout = size(datasets, 1)
-
-    if runtests
-        test_option_configuration(T, options)
-        # Testing the first output variable is the same:
-        if typeof(example_dataset) <: Dataset
-            test_dataset_configuration(example_dataset, options)
-        else
-            debug(
-                (options.verbosity > 0 || options.progress),
-                "Note: you are running with a custom Dataset type. No testing of the dataset configuration is performed make sure your data is correct and that you use a compatible loss function.",
-            )
-        end
-    end
-
-=======
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     for dataset in datasets
         update_baseline_loss!(dataset, options)
     end

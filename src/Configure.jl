@@ -126,21 +126,9 @@ function test_dataset_configuration(
 end
 
 """ Move custom operators and loss functions to workers, if undefined """
-<<<<<<< HEAD
-function move_functions_to_workers(procs, options::Options, dataset::AbstractDataset{T}) where {T}
-    enable_autodiff =
-        :diff_binops in fieldnames(typeof(options.operators)) &&
-        :diff_unaops in fieldnames(typeof(options.operators)) &&
-        (
-            options.operators.diff_binops !== nothing ||
-            options.operators.diff_unaops !== nothing
-        )
-
-=======
 function move_functions_to_workers(
     procs, options::AbstractOptions, dataset::Dataset{T,L}, verbosity
 ) where {T,L}
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     # All the types of functions we need to move to workers:
     function_sets = (
         :unaops,
@@ -334,16 +322,12 @@ function test_module_on_workers(procs, options::AbstractOptions, verbosity)
 end
 
 function test_entire_pipeline(
-<<<<<<< HEAD
-    procs, dataset::AbstractDataset{T}, options::Options
-=======
     procs,
     dataset::Dataset{T},
     options::AbstractOptions,
     verbosity,
     head_plugin_states::Tuple,
     worker_plugin_states::Tuple,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 ) where {T<:DATA_TYPE}
     futures = []
     verbosity > 0 && @info "Testing entire pipeline on workers..."

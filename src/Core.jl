@@ -15,14 +15,6 @@ include("Plugin.jl")
 include("Options.jl")
 include("InterfaceDataTypes.jl")
 
-<<<<<<< HEAD
-import .ProgramConstantsModule:
-    MAX_DEGREE, BATCH_DIM, FEATURE_DIM, RecordType, DATA_TYPE, LOSS_TYPE
-import .DatasetModule: Dataset, AbstractDataset
-import .OptionsStructModule: Options, ComplexityMapping, MutationWeights, sample_mutation
-import .OptionsModule: Options
-import .OperatorsModule:
-=======
 using .ProgramConstantsModule: MaybeTrace, TraceType, DATA_TYPE, LOSS_TYPE
 using .DatasetModule:
     Dataset,
@@ -71,7 +63,6 @@ using .OptionsStructModule:
     check_warm_start_compatibility
 using .OperatorsModule:
     get_safe_op,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     plus,
     sub,
     mult,

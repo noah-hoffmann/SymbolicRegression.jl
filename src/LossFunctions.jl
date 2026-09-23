@@ -10,12 +10,6 @@ using DynamicExpressions:
     eval_tree_array
 using DynamicExpressions.EvaluateModule: reset_index!
 using LossFunctions: LossFunctions
-<<<<<<< HEAD
-import LossFunctions: SupervisedLoss
-import ..InterfaceDynamicExpressionsModule: eval_tree_array
-import ..CoreModule: Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
-import ..ComplexityModule: compute_complexity
-=======
 using LossFunctions: SupervisedLoss
 using ..CoreModule:
     AbstractOptions,
@@ -31,7 +25,6 @@ using ..ComplexityModule: compute_complexity
 using ..DimensionalAnalysisModule: violates_dimensional_constraints
 using ..InterfaceDynamicExpressionsModule:
     expected_array_type, takes_eval_context, _process_eval_options
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 function create_eval_context(dataset::Dataset, options::AbstractOptions, num_arrays::Int)
     if options.bumper isa Val{true} || !takes_eval_context(options.operators)
@@ -153,15 +146,11 @@ end
 
 # This evaluates function F:
 function evaluator(
-<<<<<<< HEAD
-    f::F, tree::Node{T}, dataset::AbstractDataset{T,L}, options::Options
-=======
     f::F,
     tree::Union{AbstractExpressionNode{T},AbstractExpression{T}},
     dataset::Dataset{T,L},
     options::AbstractOptions,
     idx,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 )::L where {T<:DATA_TYPE,L<:LOSS_TYPE,F}
     full_dataset = get_full_dataset(dataset)
     idx = @something(idx, get_indices(dataset), Some(nothing))
@@ -176,9 +165,6 @@ end
 
 # Evaluate the loss of a particular expression on the input dataset.
 function eval_loss(
-<<<<<<< HEAD
-    tree::Node{T}, dataset::AbstractDataset{T,L}, options::Options
-=======
     tree::Union{AbstractExpression{T},AbstractExpressionNode{T}},
     dataset::Dataset{T,L},
     options::AbstractOptions;
@@ -186,7 +172,6 @@ function eval_loss(
     idx=nothing,
     eval_context=nothing,
     kws...,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 )::L where {T<:DATA_TYPE,L<:LOSS_TYPE}
     eval_context = _process_eval_options(eval_context, kws, :eval_loss)
     kws = Base.structdiff((; kws...), (; eval_options=nothing))
@@ -238,10 +223,6 @@ function loss_to_cost(
 end
 
 # Score an equation
-<<<<<<< HEAD
-function score_func(
-    dataset::AbstractDataset{T,L}, member, options::Options, complexity::Union{Int,Nothing}=nothing
-=======
 function eval_cost(
     dataset::Dataset{T,L},
     member,
@@ -249,7 +230,6 @@ function eval_cost(
     complexity::Union{Int,Nothing}=nothing,
     eval_context=nothing,
     kws...,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 )::Tuple{L,L} where {T<:DATA_TYPE,L<:LOSS_TYPE}
     eval_context = _process_eval_options(eval_context, kws, :eval_cost)
     kws = Base.structdiff((; kws...), (; eval_options=nothing))
@@ -266,45 +246,8 @@ function eval_cost(
     return cost, result_loss
 end
 
-<<<<<<< HEAD
-# Score an equation with a small batch
-function score_func_batch(
-    dataset::AbstractDataset{T,L}, member, options::Options, complexity::Union{Int,Nothing}=nothing
-)::Tuple{L,L} where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    if options.loss_function !== nothing
-        error("Batched losses for custom objectives are not yet implemented.")
-    end
-    batch_idx = StatsBase.sample(1:(dataset.n), options.batch_size; replace=true)
-    batch_X = view(dataset.X, :, batch_idx)
-    (prediction, completion) = eval_tree_array(get_tree(member), batch_X, options)
-    if !completion
-        return L(0), L(Inf)
-    end
-
-    batch_y = view(dataset.y::AbstractVector{T}, batch_idx)
-    if !dataset.weighted
-        result_loss = L(_loss(prediction, batch_y, options.elementwise_loss))
-    else
-        w = dataset.weights::AbstractVector{T}
-        batch_w = view(w, batch_idx)
-        result_loss = L(
-            _weighted_loss(prediction, batch_y, batch_w, options.elementwise_loss)
-        )
-    end
-    score = loss_to_score(
-        result_loss,
-        dataset.use_baseline,
-        dataset.baseline_loss,
-        member,
-        options,
-        complexity,
-    )
-    return score, result_loss
-end
-=======
 # Deprecated form
 function score_func end
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 """
     update_baseline_loss!(dataset::Dataset{T,L}, options::AbstractOptions) where {T<:DATA_TYPE,L<:LOSS_TYPE}
@@ -312,11 +255,7 @@ function score_func end
 Update the baseline loss of the dataset using the loss function specified in `options`.
 """
 function update_baseline_loss!(
-<<<<<<< HEAD
-    dataset::AbstractDataset{T,L}, options::Options
-=======
     dataset::Dataset{T,L}, options::AbstractOptions
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 ) where {T<:DATA_TYPE,L<:LOSS_TYPE}
     example_tree = create_expression(init_value(T), options, dataset)
     # constructorof(options.node_type)(T; val=dataset.avg_y)

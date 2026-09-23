@@ -1,18 +1,5 @@
 module SingleIterationModule
 
-<<<<<<< HEAD
-import DynamicExpressions: string_tree, simplify_tree, combine_operators
-import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
-import ..ComplexityModule: compute_complexity
-import ..UtilsModule: debug
-import ..PopMemberModule: copy_pop_member, generate_reference
-import ..PopulationModule: Population, finalize_scores, best_sub_pop
-import ..HallOfFameModule: HallOfFame
-import ..AdaptiveParsimonyModule: RunningSearchStatistics
-import ..RegularizedEvolutionModule: reg_evol_cycle
-import ..ConstantOptimizationModule: optimize_constants
-import ..RecorderModule: @recorder
-=======
 using ADTypes: AutoEnzyme
 using DynamicExpressions: AbstractExpression, simplify_tree!, combine_operators
 using ..UtilsModule: @threads_if, strictmap
@@ -33,18 +20,12 @@ using ..RegularizedEvolutionModule: reg_evol_cycle
 using ..LossFunctionsModule: create_eval_context, eval_cost
 using ..ConstantOptimizationModule: optimize_constants
 using ..TracingModule: trace_optimization!
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 # Cycle through regularized evolution many times,
 # printing the fittest equation every 10% through
 function s_r_cycle(
-<<<<<<< HEAD
-    dataset::AbstractDataset{T,L},
-    pop::Population{T,L},
-=======
     dataset::D,
     pop::P,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     ncycles::Int,
     curmaxsize::Int;
     verbosity::Int=0,
@@ -91,17 +72,8 @@ function s_r_cycle(
 end
 
 function optimize_and_simplify_population(
-<<<<<<< HEAD
-    dataset::AbstractDataset{T,L},
-    pop::Population{T,L},
-    options::Options,
-    curmaxsize::Int,
-    record::RecordType,
-)::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
-=======
     dataset::D, pop::P, options::AbstractOptions, curmaxsize::Int, trace::MaybeTrace
 )::Tuple{P,Float64} where {T,L,D<:Dataset{T,L},P<:Population{T,L}}
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     array_num_evals = zeros(Float64, pop.n)
     do_optimization = rand(pop.n) .< options.optimizer_probability
     # Note: we have to turn off this threading loop due to Enzyme, since we need

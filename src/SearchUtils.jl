@@ -11,14 +11,6 @@ using StyledStrings: @styled_str
 using DispatchDoctor: @unstable
 using Logging: AbstractLogger
 
-<<<<<<< HEAD
-import ..CoreModule: Dataset, AbstractDataset, Options
-import ..ComplexityModule: compute_complexity
-import ..PopulationModule: Population, copy_population
-import ..HallOfFameModule:
-    HallOfFame, copy_hall_of_fame, calculate_pareto_frontier, string_dominating_pareto_curve
-import ..ProgressBarsModule: WrappedProgressBar, set_multiline_postfix!, manually_iterate!
-=======
 using DynamicExpressions:
     AbstractExpression,
     string_tree,
@@ -44,7 +36,6 @@ using ..ConstantOptimizationModule: optimize_constants
 using ..ProgressBarsModule: WrappedProgressBar, manually_iterate!, barlen
 using ..ExpressionBuilderModule: strip_metadata
 using ..InterfaceDynamicExpressionsModule: takes_eval_context
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 function logging_callback! end
 
@@ -388,18 +379,6 @@ function read_available_nonblocking(stream::IO)::Vector{UInt8}
     end
 end
 
-<<<<<<< HEAD
-function init_dummy_pops(
-    nout::Int, npops::Int, datasets::Vector{AD}, options::Options
-)::Vector{Vector{Population{T,L}}} where {T,L,AD<:AbstractDataset{T,L}}
-    return [
-        [
-            Population(
-                datasets[j]; npop=1, options=options, nfeatures=datasets[j].nfeatures
-            ) for i in 1:npops
-        ] for j in 1:nout
-    ]
-=======
 function read_available_nonblocking(stream::Base.LibuvStream)::Vector{UInt8}
     Base.iolock_begin()
     try
@@ -407,7 +386,6 @@ function read_available_nonblocking(stream::Base.LibuvStream)::Vector{UInt8}
     finally
         Base.iolock_end()
     end
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 end
 
 function parse_quit_signal(data::AbstractVector{UInt8}, saw_quit_char::Bool)
@@ -677,13 +655,8 @@ function update_progress_bar!(
     progress_bar::WrappedProgressBar,
     iterations_elapsed::Int,
     hall_of_fame::HallOfFame{T,L},
-<<<<<<< HEAD
-    dataset::AbstractDataset{T,L},
-    options::Options,
-=======
     dataset::Dataset{T,L},
     options::AbstractOptions,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     equation_speed::Vector{Float32},
     head_node_occupation::Float64,
     parallelism=:serial,
@@ -714,26 +687,16 @@ function update_progress_bar!(
 end
 
 function print_search_state(
-<<<<<<< HEAD
-    hall_of_fames::Vector{H},
-    datasets::Vector{AD};
-    options::Options,
-=======
     hall_of_fames,
     datasets;
     options::AbstractOptions,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     equation_speed::Vector{Float32},
     total_cycles::Int,
     cycles_remaining::Vector{Int},
     head_node_occupation::Float64,
     parallelism=:serial,
     width::Union{Integer,Nothing}=nothing,
-<<<<<<< HEAD
-) where {T,L,AD<:AbstractDataset{T,L},H<:HallOfFame{T,L}}
-=======
 )
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     twidth = (width === nothing) ? 100 : max(100, width::Integer)
     nout = length(datasets)
     average_speed = sum(equation_speed) / length(equation_speed)

@@ -344,13 +344,8 @@ const OPTION_DESCRIPTIONS = """- `defaults`: What set of defaults to use for `Op
             - `SigmoidLoss()`,
             - `DWDMarginLoss(q)`.
 - `loss_function`: Alternatively, you may redefine the loss used
-<<<<<<< HEAD
-    as any function of `tree::Node{T}`, `dataset::AbstractDataset{T}`,
-    and `options::Options`, so long as you output a non-negative
-=======
     as any function of `tree::AbstractExpressionNode{T}`, `dataset::Dataset{T}`,
     and `options::AbstractOptions`, so long as you output a non-negative
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     scalar of type `T`. This is useful if you want to use a loss
     that takes into account derivatives, or correlations across
     the dataset. This also means you could use a custom evaluation
@@ -711,32 +706,6 @@ $(OPTION_DESCRIPTIONS)
     ## Undocumented features:
     bin_constraints=nothing,
     una_constraints=nothing,
-<<<<<<< HEAD
-    progress=true,
-    terminal_width=nothing,
-    optimizer_algorithm="BFGS",
-    optimizer_nrestarts=2,
-    optimizer_probability=0.14f0,
-    optimizer_iterations=nothing,
-    optimizer_options::Union{Dict,NamedTuple,Optim.Options,Nothing}=nothing,
-    recorder=nothing,
-    recorder_file="pysr_recorder.json",
-    early_stop_condition::Union{Function,Real,Nothing}=nothing,
-    return_state::Bool=false,
-    timeout_in_seconds=nothing,
-    max_evals=nothing,
-    skip_mutation_failures::Bool=true,
-    enable_autodiff::Bool=false,
-    nested_constraints=nothing,
-    deterministic=false,
-    eval_batch_function=nothing,
-    min_length::Int=3,
-    max_length::Int=3,
-    predefined_nodes::Vector{Node}=Node[],
-    # Not search options; just construction options:
-    define_helper_functions=true,
-    # Deprecated args:
-=======
     terminal_width::Union{Nothing,Integer}=nothing,
     use_tracing::Bool=false,
     tracing_file::AbstractString="pysr_trace.jsonl",
@@ -757,7 +726,6 @@ $(OPTION_DESCRIPTIONS)
     deprecated_return_state::Union{Bool,Nothing}=nothing,
     unary_operators=nothing,
     binary_operators=nothing,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     kws...,
     #########################################
 )
@@ -822,15 +790,10 @@ $(OPTION_DESCRIPTIONS)
             "Unknown deprecated keyword argument: $k. Please update `Options(;)` to transfer this key.",
         )
     end
-<<<<<<< HEAD
 
     if elementwise_loss === nothing
         elementwise_loss = L2DistLoss()
-    # else
-    #     if loss_function !== nothing
-    #         error("You cannot specify both `elementwise_loss` and `loss_function`.")
-    #     end
-=======
+    end
     mutation_weights_were_provided = mutation_weights !== nothing
     if npop !== nothing
         Base.depwarn("`npop` is deprecated. Use `population_size` instead.", :Options)
@@ -850,7 +813,6 @@ $(OPTION_DESCRIPTIONS)
         else
             Optim.BFGS(; linesearch=LineSearches.BackTracking())
         end
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     end
     if output_file !== nothing
         error("`output_file` is deprecated. Use `output_directory` instead.")
@@ -1091,14 +1053,6 @@ $(OPTION_DESCRIPTIONS)
         early_stop_condition
     end
 
-<<<<<<< HEAD
-    if length(predefined_nodes) > 0 && mutation_weights.replace_with_predefined_node < 1e-6
-        set_mutation_weights.replace_with_predefined_node = 0.5
-    elseif length(predefined_nodes) == 0
-        set_mutation_weights.replace_with_predefined_node = 0.0
-    end
-
-=======
     # Parse optimizer options
     if !isa(optimizer_options, Optim.Options)
         optimizer_iterations = something(optimizer_iterations, 8)
@@ -1239,7 +1193,6 @@ $(OPTION_DESCRIPTIONS)
 
     nops = map(length, operators.ops)
 
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     options = Options{
         typeof(complexity_mapping),
         operator_specialization(typeof(operators), expression_type),
@@ -1324,16 +1277,9 @@ $(OPTION_DESCRIPTIONS)
         skip_mutation_failures,
         deterministic,
         define_helper_functions,
-<<<<<<< HEAD
-        eval_batch_function,
-        min_length,
-        max_length,
-        predefined_nodes,
-=======
         Val(use_tracing),
         popmember_type,
         plugin_tuple,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     )
 
     return options

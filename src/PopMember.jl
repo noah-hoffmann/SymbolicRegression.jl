@@ -1,16 +1,11 @@
 module PopMemberModule
 
-<<<<<<< HEAD
-import DynamicExpressions: Node, copy_node, count_nodes
-import ..CoreModule: Options, Dataset, AbstractDataset, DATA_TYPE, LOSS_TYPE
-=======
 using DispatchDoctor: @unstable
 using DynamicExpressions: AbstractExpression, AbstractExpressionNode, string_tree
 import DynamicExpressions: constructorof, with_type_parameters
 using ..CoreModule:
     AbstractOptions, Dataset, DATA_TYPE, LOSS_TYPE, create_expression, AbstractMutation
 import ..CoreModule.OptionsModule: default_popmember_type
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 import ..ComplexityModule: compute_complexity
 using ..UtilsModule: get_birth_order
 using ..LossFunctionsModule: eval_cost
@@ -132,32 +127,17 @@ function PopMember(
 end
 
 """
-<<<<<<< HEAD
-    PopMember(dataset::AbstractDataset{T},
-              t::Node, options::Options)
-=======
     PopMember(
         dataset::Dataset{T,L},
         t::AbstractExpression{T},
         options::AbstractOptions
     )
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 Create a population member with a birth date at the current time.
 Automatically compute the cost for this tree.
 
 # Arguments
 
-<<<<<<< HEAD
-- `dataset::AbstractDataset{T,L}`: The dataset to evaluate the tree on.
-- `t::Node{T}`: The tree for the population member.
-- `options::Options`: What options to use.
-"""
-function PopMember(
-    dataset::AbstractDataset{T,L},
-    t::Node{T},
-    options::Options,
-=======
 - `dataset::Dataset{T,L}`: The dataset to evaluate the tree on.
 - `t::AbstractExpression{T}`: The tree for the population member.
 - `options::AbstractOptions`: What options to use.
@@ -166,7 +146,6 @@ function PopMember(
     dataset::Dataset{T,L},
     tree::Union{AbstractExpressionNode{T},AbstractExpression{T}},
     options::AbstractOptions,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     complexity::Union{Int,Nothing}=nothing;
     ref::Int=-1,
     parent::Int=-1,

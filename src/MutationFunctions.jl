@@ -294,20 +294,6 @@ end
     end
 end
 
-<<<<<<< HEAD
-# Replace random node with a random predfined node
-function replace_random_node(tree::Node, options::Options)::Node
-    # get a random node from the tree
-    node = random_node(tree)
-    # get a new random node from the list of predefined_nodes
-    newnode = copy_node(rand(options.predefined_nodes))
-    # place new node in the tree
-    set_node!(node, newnode)
-    return tree
-end
-
-# Create a random equation by appending random operators
-=======
 """Add random node to the top of a tree"""
 function prepend_random_op(
     ex::AbstractExpression{T},
@@ -418,7 +404,6 @@ function randomize_tree(
 end
 
 """Create a random equation by appending random operators"""
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 function gen_random_tree(
     length::Int,
     options::AbstractOptions,

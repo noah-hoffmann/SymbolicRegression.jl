@@ -1,17 +1,6 @@
 module PopulationModule
 
 using StatsBase: StatsBase
-<<<<<<< HEAD
-import Random: randperm
-import DynamicExpressions: string_tree
-import ..CoreModule: Options, Dataset, AbstractDataset, RecordType, DATA_TYPE, LOSS_TYPE
-import ..ComplexityModule: compute_complexity
-import ..LossFunctionsModule: score_func, update_baseline_loss!
-import ..AdaptiveParsimonyModule: RunningSearchStatistics
-import ..MutationFunctionsModule: gen_random_tree
-import ..PopMemberModule: PopMember, copy_pop_member
-import ..UtilsModule: bottomk_fast, argmin_fast
-=======
 using DispatchDoctor: @unstable
 using DynamicExpressions: AbstractExpression, constructorof
 using ..CoreModule:
@@ -29,7 +18,6 @@ using ..MutationFunctionsModule: gen_random_tree
 using ..PopMemberModule: AbstractPopMember, PopMember
 import ..PopMemberModule: popmember_type
 using ..UtilsModule: bottomk_fast, argmin_fast, PerTaskCache, strictmap
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 # A list of members of the population, with easy constructors,
 #  which allow for random generation of new populations
 struct Population{
@@ -66,28 +54,13 @@ function _init_tree(
 end
 
 """
-<<<<<<< HEAD
-    Population(dataset::AbstractDataset{T,L};
-               npop::Int, nlength::Int=3, options::Options,
-               nfeatures::Int)
-=======
     Population(dataset::Dataset{T,L};
                population_size, nlength::Int=3, options::AbstractOptions,
                nfeatures::Int, plugin_states::Tuple)
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 Create random population and evaluate them on the dataset.
 """
 function Population(
-<<<<<<< HEAD
-    dataset::AbstractDataset{T,L}; npop::Int, nlength::Int=3, options::Options, nfeatures::Int
-) where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    return Population{T,L}(
-        [
-            PopMember(
-                dataset,
-                gen_random_tree(rand(options.min_length:options.max_length), options, nfeatures, T),
-=======
     dataset::Dataset{T,L};
     options::AbstractOptions,
     population_size=nothing,
@@ -117,7 +90,6 @@ function Population(
             constructorof(PM)(
                 dataset,
                 _init_tree(dataset, options, nlength, nfeatures, T, plugin_states),
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
                 options;
                 parent=-1,
                 deterministic=options.deterministic,
@@ -225,12 +197,6 @@ function _best_of_sample(
 end
 _get_cost(member::AbstractPopMember) = member.cost
 
-<<<<<<< HEAD
-function finalize_scores(
-    dataset::AbstractDataset{T,L}, pop::Population{T,L}, options::Options
-)::Tuple{Population{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    need_recalculate = options.batching
-=======
 const CACHED_WEIGHTS =
     let init_k = collect(0:5),
         init_prob_each = 0.5 * (1 - 0.5) .^ init_k,
@@ -255,7 +221,6 @@ function finalize_costs(
     dataset::Dataset{T,L}, pop::P, options::AbstractOptions
 )::Tuple{P,Float64} where {T,L,P<:Population{T,L}}
     need_recalculate = use_batching(options, dataset)
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     num_evals = 0.0
     if need_recalculate
         for member in 1:(pop.n)

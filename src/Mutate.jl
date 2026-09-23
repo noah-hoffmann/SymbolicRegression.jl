@@ -1,18 +1,5 @@
 module MutateModule
 
-<<<<<<< HEAD
-import DynamicExpressions:
-    Node, copy_node, count_nodes, count_constants, simplify_tree, combine_operators
-import ..CoreModule:
-    Options, MutationWeights, Dataset, AbstractDataset, RecordType, sample_mutation, DATA_TYPE, LOSS_TYPE
-import ..ComplexityModule: compute_complexity
-import ..LossFunctionsModule: score_func, score_func_batch
-import ..CheckConstraintsModule: check_constraints
-import ..AdaptiveParsimonyModule: RunningSearchStatistics
-import ..PopMemberModule: PopMember
-import ..MutationFunctionsModule:
-    gen_random_tree_fixed_size,
-=======
 using DispatchDoctor: @unstable
 using DynamicExpressions:
     AbstractExpression,
@@ -67,7 +54,6 @@ using ..CheckConstraintsModule: check_constraints
 using ..PopMemberModule: AbstractPopMember, PopMember, create_child
 using ..UtilsModule: strictmap
 using ..MutationFunctionsModule:
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     mutate_constant,
     mutate_operator,
     mutate_feature,
@@ -75,13 +61,6 @@ using ..MutationFunctionsModule:
     append_random_op,
     prepend_random_op,
     insert_random_op,
-<<<<<<< HEAD
-    delete_random_op,
-    crossover_trees,
-    replace_random_node
-import ..ConstantOptimizationModule: optimize_constants
-import ..RecorderModule: @recorder
-=======
     delete_random_op!,
     form_random_connection!,
     break_random_connection!,
@@ -94,7 +73,6 @@ using ..BacksolveModule:
 using ..ConstantOptimizationModule: optimize_constants
 using ..TracingModule:
     trace_identity_mutation!, trace_mutation_result!, trace_mutation_type!
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 abstract type AbstractMutationResult{N<:AbstractExpression,P<:AbstractPopMember} end
 
@@ -235,14 +213,6 @@ function condition_mutation_weights!(
     return nothing
 end
 
-<<<<<<< HEAD
-# Go through one simulated options.annealing mutation cycle
-#  exp(-delta/T) defines probability of accepting a change
-function next_generation(
-    dataset::AbstractDataset{T,L},
-    member::PopMember{T,L},
-    temperature,
-=======
 """
     condition_mutation_weights!(weights, state, plugin, member, options, curmaxsize, nfeatures)
 
@@ -265,7 +235,6 @@ function condition_mutate_constant!(
     weights::AbstractVector,
     member::AbstractPopMember,
     options::AbstractOptions,
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     curmaxsize::Int,
 )
     n_constants = max(
@@ -417,47 +386,6 @@ function _next_generation(
     while (!successful_mutation) && attempts < max_attempts
         rtree[] = copy_into!(node_storage, member.tree)
 
-<<<<<<< HEAD
-        elseif mutation_choice == :add_node
-            if rand() < 0.5
-                tree = append_random_op(tree, options, nfeatures)
-                @recorder tmp_recorder["type"] = "append_op"
-            else
-                tree = prepend_random_op(tree, options, nfeatures)
-                @recorder tmp_recorder["type"] = "prepend_op"
-            end
-            is_success_always_possible = false
-            # Can potentially have a situation without success
-        elseif mutation_choice == :insert_node
-            tree = insert_random_op(tree, options, nfeatures)
-            @recorder tmp_recorder["type"] = "insert_op"
-            is_success_always_possible = false
-        elseif mutation_choice == :replace_with_predefined_node
-            tree = replace_random_node(tree, options)
-            @recorder tmp_recorder["type"] = "replace_with_predefined_node"
-            is_success_always_possible = false
-        elseif mutation_choice == :delete_node
-            tree = delete_random_op(tree, options, nfeatures)
-            @recorder tmp_recorder["type"] = "delete_op"
-            is_success_always_possible = true
-        elseif mutation_choice == :simplify
-            @assert options.should_simplify
-            tree = simplify_tree(tree, options.operators)
-            tree = combine_operators(tree, options.operators)
-            @recorder tmp_recorder["type"] = "partial_simplify"
-            mutation_accepted = true
-            return (
-                PopMember(
-                    tree,
-                    beforeScore,
-                    beforeLoss,
-                    options;
-                    parent=parent_ref,
-                    deterministic=options.deterministic,
-                ),
-                mutation_accepted,
-                num_evals,
-=======
         mutation_result = mutate!(
             rtree[],
             member,
@@ -482,7 +410,6 @@ function _next_generation(
             @assert(
                 mutation_result.member isa P,
                 "Mutation result must return a `PopMember` if `return_immediately` is true"
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
             )
             _fire_on_mutation_end!(
                 options,
@@ -624,19 +551,6 @@ function _next_generation(
     return (new_member, true, num_evals)
 end
 
-<<<<<<< HEAD
-"""Generate a generation via crossover of two members."""
-function crossover_generation(
-    member1::PopMember{T,L},
-    member2::PopMember{T,L},
-    dataset::AbstractDataset{T,L},
-    curmaxsize::Int,
-    options::Options,
-)::Tuple{PopMember{T,L},PopMember{T,L},Bool,Float64} where {T<:DATA_TYPE,L<:DATA_TYPE}
-    tree1 = member1.tree
-    tree2 = member2.tree
-    crossover_accepted = false
-=======
 """
     mutate!(
         new_tree::N,
@@ -645,7 +559,6 @@ function crossover_generation(
         options::AbstractOptions;
         kws...,
     ) where {N<:AbstractExpression,P<:AbstractPopMember}
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 Perform `mutation` on the offspring `new_tree` (a fresh scratch copy of the
 parent's tree). `parent_member` carries parent metadata (cost, loss, ref, etc.)

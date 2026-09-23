@@ -2,26 +2,6 @@ module OptionsStructModule
 
 using DispatchDoctor: @unstable
 using Optim: Optim
-<<<<<<< HEAD
-using StatsBase: StatsBase
-import DynamicExpressions: AbstractOperatorEnum, Node
-import LossFunctions: SupervisedLoss
-
-mutable struct MutationWeights
-    mutate_constant::Float64
-    mutate_operator::Float64
-    add_node::Float64
-    insert_node::Float64
-    delete_node::Float64
-    simplify::Float64
-    randomize::Float64
-    do_nothing::Float64
-    optimize::Float64
-    replace_with_predefined_node::Float64
-end
-
-const mutations = [fieldnames(MutationWeights)...]
-=======
 using DynamicExpressions:
     AbstractOperatorEnum, AbstractExpressionNode, AbstractExpression, OperatorEnum
 using LossFunctions: SupervisedLoss
@@ -29,7 +9,6 @@ using LossFunctions: SupervisedLoss
 using ..DatasetModule: Dataset, batch
 using ..MutationsModule: AbstractMutation
 using ..CrossoversModule: AbstractCrossover
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 
 """
 This struct defines how complexity is calculated.
@@ -42,56 +21,11 @@ This struct defines how complexity is calculated.
 - `variable_complexity`: Complexity of using a variable.
 - `constant_complexity`: Complexity of using a constant.
 """
-<<<<<<< HEAD
-@generated function MutationWeights(;
-    mutate_constant=0.048,
-    mutate_operator=0.47,
-    add_node=0.79,
-    insert_node=5.1,
-    delete_node=1.7,
-    simplify=0.0020,
-    randomize=0.00023,
-    do_nothing=0.21,
-    optimize=0.0,
-    replace_with_predefined_node=0.0,
-)
-    return :(MutationWeights($(mutations...)))
-end
-
-"""Convert MutationWeights to a vector."""
-@generated function Base.convert(
-    ::Type{Vector}, weightings::MutationWeights
-)::Vector{Float64}
-    fields = [:(weightings.$(mut)) for mut in mutations]
-    return :([$(fields...)])
-end
-
-"""Copy MutationWeights."""
-@generated function Base.copy(weightings::MutationWeights)
-    fields = [:(weightings.$(mut)) for mut in mutations]
-    return :(MutationWeights($(fields...)))
-end
-
-"""Sample a mutation, given the weightings."""
-function sample_mutation(weightings::MutationWeights)
-    weights = convert(Vector, weightings)
-    return StatsBase.sample(mutations, StatsBase.Weights(weights))
-end
-
-"""This struct defines how complexity is calculated."""
-struct ComplexityMapping{T<:Real}
-    use::Bool  # Whether we use custom complexity, or just use 1 for everythign.
-    binop_complexities::Vector{T}  # Complexity of each binary operator.
-    unaop_complexities::Vector{T}  # Complexity of each unary operator.
-    variable_complexity::T  # Complexity of using a variable.
-    constant_complexity::T  # Complexity of using a constant.
-=======
 struct ComplexityMapping{T<:Real,VC<:Union{T,AbstractVector{T}},D}
     use::Bool
     op_complexities::NTuple{D,Vector{T}}
     variable_complexity::VC
     constant_complexity::T
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 end
 
 Base.eltype(::ComplexityMapping{T}) where {T} = T
@@ -326,16 +260,9 @@ struct Options{
     skip_mutation_failures::Bool
     deterministic::Bool
     define_helper_functions::Bool
-<<<<<<< HEAD
-    eval_batch_function::Union{Function, Nothing}
-    min_length::Int
-    max_length::Int
-    predefined_nodes::Vector{Node}
-=======
     use_tracing::Val{_use_tracing}
     popmember_type::Type{PM}
     plugins::PT
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 end
 
 @inline function use_batching(options::AbstractOptions, dataset::Dataset)

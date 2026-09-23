@@ -3,22 +3,6 @@ module ConstantOptimizationModule
 using Random: AbstractRNG, default_rng
 using LineSearches: LineSearches
 using Optim: Optim
-<<<<<<< HEAD
-import DynamicExpressions: Node, count_constants
-import ..CoreModule: Options, Dataset, DATA_TYPE, LOSS_TYPE, AbstractDataset
-import ..UtilsModule: get_birth_order
-import ..LossFunctionsModule: score_func, eval_loss
-import ..PopMemberModule: PopMember
-
-# Proxy function for optimization
-function opt_func(
-    x, dataset::AbstractDataset{T,L}, tree, constant_nodes, options
-) where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    _set_constants!(x, constant_nodes)
-    # TODO(mcranmer): This should use score_func batching.
-    loss = eval_loss(tree, dataset, options)
-    return loss::L
-=======
 using NLSolversBase: NLSolversBase
 using ADTypes: AbstractADType, AutoEnzyme
 using DifferentiationInterface: value_and_gradient, prepare_gradient
@@ -40,7 +24,6 @@ function can_optimize(::AbstractExpression{T}, options) where {T}
 end
 function can_optimize(::Type{T}, _) where {T<:Number}
     return true
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
 end
 
 """
@@ -71,13 +54,6 @@ function set_constants_for_optimization!(ex::AbstractExpression, x, refs)
     set_scalar_constants!(ex, x, refs)
 end
 
-<<<<<<< HEAD
-# Use Nelder-Mead to optimize the constants in an equation
-function optimize_constants(
-    dataset::AbstractDataset{T,L}, member::PopMember{T,L}, options::Options
-)::Tuple{PopMember{T,L},Float64} where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    nconst = count_constants(member.tree)
-=======
 """
     extract_gradient_for_optimization(grad, ex)
 
@@ -171,7 +147,6 @@ end
     can_optimize(member.tree, options) || return (member, 0.0)
     x0, refs = get_optimizable_parameters(member.tree, options)
     nconst = length(x0)
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     nconst == 0 && return (member, 0.0)
     if nconst == 1 && !(T <: Complex)
         algorithm = Optim.Newton(; linesearch=LineSearches.BackTracking())

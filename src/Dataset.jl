@@ -50,13 +50,7 @@ abstract type Dataset{T<:DATA_TYPE,L<:LOSS_TYPE} end
 - `y_sym_units`: Unit information of `y`. When used, this is a single
     `DynamicQuantities.Quantity{<:Any,<:SymbolicDimensions}`.
 """
-<<<<<<< HEAD
-abstract type AbstractDataset{T<:DATA_TYPE, L<:LOSS_TYPE,} end
-
-mutable struct Dataset{
-=======
 mutable struct BasicDataset{
->>>>>>> 0a370b48a53fc51c79bdd22688a68cc07b20ab24
     T<:DATA_TYPE,
     L<:LOSS_TYPE,
     AX<:AbstractMatrix{T},
